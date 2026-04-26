@@ -81,7 +81,7 @@ export function useAttendance() {
           collectionName: "sessions",
           id: sessionId,
           data: {
-            total_minutes: (s.total_minutes || 0) + Math.round(stats.activeSeconds / 60),
+            total_minutes: (s.total_minutes || 0) + (stats.activeSeconds / 60),
             total_keystrokes: (s.total_keystrokes || 0) + stats.keystrokes,
             face_missing_duration: (s.face_missing_duration || 0) + stats.faceMissingSeconds,
             integrity_score: stats.integrityScore

@@ -101,7 +101,7 @@ function App() {
         activeSeconds: Math.round(statsBufferRef.current.activeSeconds),
         integrityScore: 100 // Integrity logic for tab/paste removed per request
       });
-      setTodayTotalMins(prev => prev + (deltaSeconds / 60));
+      setTodayTotalMins(prev => prev + (statsBufferRef.current.activeSeconds / 60));
       statsBufferRef.current.keystrokes = currentKeystrokes;
       statsBufferRef.current.faceMissingSeconds = 0;
       statsBufferRef.current.activeSeconds = 0;
