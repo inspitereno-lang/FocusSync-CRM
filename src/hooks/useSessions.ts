@@ -1,60 +1,44 @@
-import { useState, useEffect } from "react";
-import { getDb } from "@/services/db";
+import { useState, useEffect, useCallback } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 export interface Session {
   id: string;
   user_id: string;
   login_time: string;
   logout_time: string | null;
+  last_ping: string;
   total_minutes: number;
+  total_keystrokes: number;
+  face_missing_duration: number;
+  integrity_score: number;
 }
 
 export function useSessions(userId?: string) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchSessions = async () => {
+  const fetchSessions = useCallback(async () => {
     try {
-      const db = await getDb();
-      let query = "SELECT * FROM sessions ORDER BY login_time DESC";
-      let params: any[] = [];
-      
-      if (userId) {
-        query = "SELECT * FROM sessions WHERE user_id = $1 ORDER BY login_time DESC";
-        params = [userId];
-      }
-      
-      const res = await db.select<Session[]>(query, params);
+      const filter = userId ? { user_id: userId } : undefined;
+      const res: any[] = await invoke("cloud_sync_get", { collectionName: "sessions", filter });
       setSessions(res);
     } catch (e) {
-      console.error(e);
+      console.error("Failed to fetch sessions from MongoDB:", e);
     } finally {
       setLoading(false);
     }
-  };
+  }, [userId]);
 
   useEffect(() => {
     fetchSessions();
-    const interval = setInterval(fetchSessions, 60000); // Refresh every minute
-    return () => clearInterval(interval);
-  }, [userId]);
+  }, [fetchSessions]);
 
-  const getTodayMinutes = (uid: string) => {
+  const getTodayMinutes = (targetUserId: string) => {
     const today = new Date().toISOString().split('T')[0];
     return sessions
-      .filter(s => s.user_id === uid && s.login_time.startsWith(today))
-      .reduce((acc, s) => {
-        if (s.logout_time) {
-          return acc + (Number(s.total_minutes) || 0);
-        } else {
-          // If still logged in, calculate time since login
-          const login = new Date(s.login_time).getTime();
-          const now = new Date().getTime();
-          const diff = Math.max(0, (now - login) / (1000 * 60));
-          return acc + diff;
-        }
-      }, 0);
+      .filter(s => s.user_id === targetUserId && s.login_time.startsWith(today))
+      .reduce((acc, s) => acc + (s.total_minutes || 0), 0);
   };
 
-  return { sessions, loading, getTodayMinutes, refresh: fetchSessions };
+  return { sessions, loading, refresh: fetchSessions, getTodayMinutes };
 }

@@ -1,6 +1,14 @@
 import { useState, useEffect, useCallback } from "react";
-import { getDb } from "@/services/db";
-import { ActivityService, Activity } from "@/services/activityService";
+import { invoke } from "@tauri-apps/api/core";
+
+export interface Activity {
+  id: string;
+  user_name: string;
+  user_id: string;
+  action: string;
+  time: string;
+  status: "online" | "away" | "offline";
+}
 
 export function useActivities() {
   const [activities, setActivities] = useState<Activity[]>([]);
@@ -8,39 +16,45 @@ export function useActivities() {
 
   const fetchActivities = useCallback(async () => {
     try {
-      const db = await getDb();
-      const res = await db.select<Activity[]>(
-        "SELECT * FROM activities ORDER BY time DESC LIMIT 20"
-      );
-      
-      const processed = res.map(a => {
-        const diff = Math.floor((new Date().getTime() - new Date(a.time).getTime()) / 1000);
-        let timeLabel = "Just now";
-        if (diff > 3600) timeLabel = `${Math.floor(diff/3600)}h ago`;
-        else if (diff > 60) timeLabel = `${Math.floor(diff/60)}m ago`;
-        else if (diff > 0) timeLabel = `${diff}s ago`;
-        
-        return { ...a, time: timeLabel };
+      // Fetch only the most recent activities to handle scale (100+ users)
+      const res: any[] = await invoke("cloud_sync_get", { 
+        collectionName: "activities" 
       });
-
-      setActivities(processed);
+      // Rust backend already sorts by updated_at: -1
+      // We slice here just in case to keep the UI snappy
+      setActivities(res.slice(0, 50));
     } catch (e) {
-      console.error("Failed to fetch activities", e);
+      console.error("Failed to fetch activities from MongoDB:", e);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  const logActivity = async (activity: Omit<Activity, "id" | "time">) => {
-    await ActivityService.logActivity(activity);
-    await fetchActivities();
-  };
-
   useEffect(() => {
     fetchActivities();
-    const interval = setInterval(fetchActivities, 15000); // Refresh every 15s for more real-time feel
+    const interval = setInterval(fetchActivities, 30000);
     return () => clearInterval(interval);
   }, [fetchActivities]);
+
+  const logActivity = async (activity: Omit<Activity, "id" | "time">) => {
+    const id = crypto.randomUUID();
+    const newActivity = {
+      ...activity,
+      id,
+      time: new Date().toISOString()
+    };
+
+    try {
+      await invoke("cloud_sync_upsert", { 
+        collectionName: "activities",
+        id,
+        data: newActivity 
+      });
+      setActivities(prev => [newActivity as Activity, ...prev].slice(0, 50));
+    } catch (e) {
+      console.error("Failed to log activity to MongoDB:", e);
+    }
+  };
 
   return { activities, loading, logActivity, refresh: fetchActivities };
 }

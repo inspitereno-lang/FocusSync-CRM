@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, Settings, LogOut, Activity,
   Calendar, Bell, Shield, Server,
   Database, HardDrive, Cpu, AlertTriangle, ArrowUpRight, ArrowDownRight,
-  UserPlus, Lock, ShieldCheck, Mail, X, Search, Filter, Clock
+  UserPlus, Lock, ShieldCheck, Mail, X, Search, Filter, Clock, Trash2
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useUsers, SystemUser } from "@/hooks/useUsers";
@@ -12,7 +12,6 @@ import { useTasks, Task } from "@/hooks/useTasks";
 import { useAttendance } from "@/hooks/useAttendance";
 import { UserModal } from "@/components/ui/Modals";
 import { TaskModal } from "@/components/ui/Modals";
-import { DataSyncService } from "@/services/syncService";
 import { useMessages } from "@/hooks/useMessages";
 import { useActivities } from "@/hooks/useActivities";
 import { MessageCircle, AlertCircle, Send } from "lucide-react";
@@ -139,7 +138,7 @@ export default function AdminDashboard() {
   const [activeView, setActiveView] = useState("dashboard");
   const { users: systemUsers, addUser, updateUser, deleteUser, refresh: fetchUsers } = useUsers();
   const { tasks, addTask, updateTask, deleteTask, refresh: fetchTasks } = useTasks();
-  const { activeSessions, proctoringAlerts, fetchActiveStatus, fetchAlerts, fetchAllUserStats } = useAttendance();
+  const { activeSessions, proctoringAlerts, fetchActiveStatus, fetchAlerts, fetchAllUserStats, clearAttendanceData } = useAttendance();
   const { messages, sendMessage } = useMessages();
   const { activities } = useActivities();
 
@@ -194,7 +193,6 @@ export default function AdminDashboard() {
     fetchActiveStatus();
     fetchAlerts();
     fetchAllUserStats().then(setAllUserStats);
-    DataSyncService.triggerSync();
 
     const interval = setInterval(() => {
       fetchActiveStatus();
@@ -796,7 +794,33 @@ export default function AdminDashboard() {
   };
 
   const renderAudit = () => {
-    const filtered = allUserStats.filter(u =>
+    // 1. Aggregate sessions by user for "Today"
+    const today = new Date().toISOString().split('T')[0];
+    const userAggregates = systemUsers.map(user => {
+      const userSessions = allUserStats.filter(s => 
+        s.user_id === user.id && 
+        s.login_time && s.login_time.startsWith(today)
+      );
+
+      const total_minutes = userSessions.reduce((acc, s) => acc + (s.total_minutes || 0), 0);
+      const total_keystrokes = userSessions.reduce((acc, s) => acc + (s.total_keystrokes || 0), 0);
+      const face_missing_duration = userSessions.reduce((acc, s) => acc + (s.face_missing_duration || 0), 0);
+      const avg_integrity = userSessions.length > 0 
+        ? userSessions.reduce((acc, s) => acc + (s.integrity_score || 100), 0) / userSessions.length
+        : 100;
+
+      return {
+        ...user,
+        total_minutes,
+        total_keystrokes,
+        face_missing_duration,
+        integrity_score: avg_integrity,
+        session_count: userSessions.length,
+        is_online: activeSessions.some(as => as.user_id === user.id)
+      };
+    });
+
+    const filtered = userAggregates.filter(u =>
       attendanceFilter === "all" ? true : u.role === attendanceFilter
     );
 
@@ -943,9 +967,9 @@ export default function AdminDashboard() {
                     </td>
                     <td className="py-4"><span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${u.role === 'manager' ? 'bg-purple-500/20 text-purple-400' : 'bg-blue-500/20 text-blue-400'}`}>{u.role}</span></td>
                     <td className="py-4">{u.is_online ? <span className="flex items-center gap-1.5 text-emerald-400 text-[10px] font-bold uppercase tracking-wider"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />Online</span> : <span className="text-slate-600 text-[10px] font-bold uppercase tracking-wider">Offline</span>}</td>
-                    <td className="py-4 font-mono text-xs text-slate-300">{fmtTime(u.total_minutes || 0)}</td>
+                    <td className="py-4 font-mono text-xs text-slate-300">{fmtTime(Math.round(u.total_minutes || 0))}</td>
                     <td className="py-4 font-mono text-xs text-slate-300">{(u.total_keystrokes || 0).toLocaleString()}</td>
-                    <td className="py-4 font-mono text-xs text-slate-300">{fv}%</td>
+                    <td className="py-4 font-mono text-xs text-slate-300">{Math.round(fv)}%</td>
                     <td className="py-4"><span className="text-sm font-bold font-mono" style={{ color: getScoreColor(score) }}>{score}%</span></td>
                     <td className="py-4 text-right pr-2"><button className="px-3 py-1.5 rounded-lg bg-blue-500/10 text-blue-400 text-[10px] font-bold uppercase transition-all border border-blue-500/20">View</button></td>
                   </tr>
@@ -1032,6 +1056,28 @@ export default function AdminDashboard() {
               </div>
             </div>
           ))}
+        </div>
+      </div>
+      
+      <div className="glass-card md:col-span-2 border-red-500/20 bg-red-500/5">
+        <div className="section-title text-red-400"><Trash2 size={16} /> System Maintenance</div>
+        <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+          <div>
+            <div className="text-sm font-bold text-white">Reset Attendance Database</div>
+            <p className="text-xs text-slate-500">Permanently delete all sessions, alerts, and activity logs. Use for testing or new cycles.</p>
+          </div>
+          <button 
+            onClick={async () => {
+              if (confirm("Are you sure you want to PERMANENTLY clear all session and attendance data? This cannot be undone.")) {
+                await clearAttendanceData();
+                await fetchAllUserStats().then(setAllUserStats);
+                alert("Attendance database cleared successfully.");
+              }
+            }}
+            className="px-6 py-2.5 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700 transition-all shadow-lg shadow-red-600/20"
+          >
+            Reset All Data
+          </button>
         </div>
       </div>
     </div>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { getDb } from '@/services/db';
+import { invoke } from '@tauri-apps/api/core';
 
 const KeyboardIcon = ({ fill = "#9152EE" }) => (
   <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={fill} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -56,36 +56,50 @@ const AttendanceReport = ({ userId }) => {
   const fetchStats = async () => {
     if (!userId) { setLoading(false); return; }
     try {
-      const db = await getDb();
-      const res = await db.select(
-        `SELECT 
-          SUM(total_minutes) as totalMinutes,
-          SUM(COALESCE(total_keystrokes, 0)) as totalKeystrokes,
-          COALESCE(AVG(NULLIF(integrity_score, 0)), 100) as avgIntegrity,
-          SUM(COALESCE(face_missing_duration, 0)) as totalFaceMissing,
-          MIN(login_time) as firstLogin
-         FROM sessions 
-         WHERE user_id = $1`,
-        [userId]
-      );
+      // Get session stats from MongoDB
+      const sessionsRes = await invoke("cloud_sync_get", {
+        collectionName: "sessions",
+        filter: { user_id: userId }
+      });
 
-      const violationsRes = await db.select(
-        `SELECT COUNT(*) as count FROM proctoring_events WHERE user_id = $1`,
-        [userId]
-      );
+      // Get proctoring event count from MongoDB
+      const proctoringRes = await invoke("cloud_sync_get", {
+        collectionName: "proctoring_events",
+        filter: { user_id: userId }
+      });
 
-      if (res && res[0]) {
+      if (sessionsRes && Array.isArray(sessionsRes)) {
+        let totalMinutes = 0;
+        let totalKeystrokes = 0;
+        let totalIntegrity = 0;
+        let integrityCount = 0;
+        let totalFaceMissing = 0;
+        let firstLogin = null;
+
+        sessionsRes.forEach(s => {
+          totalMinutes += (s.total_minutes || 0);
+          totalKeystrokes += (s.total_keystrokes || 0);
+          if (s.integrity_score) {
+            totalIntegrity += s.integrity_score;
+            integrityCount++;
+          }
+          totalFaceMissing += (s.face_missing_duration || 0);
+          if (!firstLogin || new Date(s.login_time) < new Date(firstLogin)) {
+            firstLogin = s.login_time;
+          }
+        });
+
         setStats({
-          totalMinutes: Math.round(res[0].totalMinutes || 0),
-          totalKeystrokes: res[0].totalKeystrokes || 0,
-          integrityScore: Math.round(res[0].avgIntegrity || 100),
-          faceMissingSeconds: res[0].totalFaceMissing || 0,
-          violations: violationsRes[0]?.count || 0,
-          loginTime: res[0].firstLogin,
+          totalMinutes: Math.round(totalMinutes),
+          totalKeystrokes: totalKeystrokes,
+          integrityScore: integrityCount > 0 ? Math.round(totalIntegrity / integrityCount) : 100,
+          faceMissingSeconds: totalFaceMissing,
+          violations: Array.isArray(proctoringRes) ? proctoringRes.length : 0,
+          loginTime: firstLogin,
         });
       }
     } catch (e) {
-      console.error("Failed to fetch report stats", e);
+      console.error("Failed to fetch report stats from MongoDB:", e);
     } finally {
       setLoading(false);
       setLastRefreshed(new Date());
@@ -99,11 +113,8 @@ const AttendanceReport = ({ userId }) => {
   }, [userId]);
 
   const totalHours = Math.floor(stats.totalMinutes / 60);
-  const totalMinsRemainder = stats.totalMinutes % 60;
-  const faceVisibilityPct = stats.totalMinutes > 0
-    ? Math.max(0, Math.round(100 - (stats.faceMissingSeconds / (stats.totalMinutes * 60)) * 100))
-    : 100;
-
+  const totalMinsRemainder = Math.round(stats.totalMinutes % 60);
+  
   const scoreColor = stats.integrityScore >= 85 ? '#34d399' : stats.integrityScore >= 65 ? '#fbbf24' : '#f87171';
   const scoreBg = stats.integrityScore >= 85 ? 'rgba(52,211,153,0.1)' : stats.integrityScore >= 65 ? 'rgba(251,191,36,0.1)' : 'rgba(248,113,113,0.1)';
   const scoreLabel = stats.integrityScore >= 85 ? 'Excellent' : stats.integrityScore >= 65 ? 'Warning' : 'Critical';

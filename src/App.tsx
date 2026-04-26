@@ -7,14 +7,13 @@ import ManagerDashboard from "@/components/ManagerDashboard";
 import AdminDashboard from "@/components/AdminDashboard";
 import GazeCalibration from "@/components/Proctoring/GazeCalibration";
 import ProctoringTracker from "@/components/Proctoring/ProctoringTracker";
-import { DataSyncService } from "@/services/syncService";
 import { useAttendance } from "@/hooks/useAttendance";
 import { useToasts } from "@/components/ui/ToastContext";
 import "./App.css";
 import { useEffect, useRef } from "react";
 
 function App() {
-  const { user, isLoggedIn, login, logout, isDbReady } = useAuth();
+  const { user, isLoggedIn, login, logout, isDbReady, dbStatus } = useAuth();
   const [isCalibrated, setIsCalibrated] = useState(false);
   const [isOnline, setIsOnline] = useState(window.navigator.onLine);
   const { updateSessionStats, logSessionStart, logSessionEnd, logPing } = useAttendance();
@@ -23,7 +22,6 @@ function App() {
   const statsBufferRef = useRef({ keystrokes: 0, faceMissingSeconds: 0, activeSeconds: 0 });
 
   // ── ONLINE STATUS LISTENERS ──
-
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
@@ -38,36 +36,6 @@ function App() {
   }, []);
 
   const { showToast } = useToasts();
-
-  // ── START CLOUD SYNC ──
-  useEffect(() => {
-    if (isDbReady) {
-      DataSyncService.startSync();
-      
-      const setupListeners = async () => {
-        const { listen } = await import("@tauri-apps/api/event");
-        
-        const unlistenSyncTrigger = await listen("sync-trigger", () => {
-          DataSyncService.triggerSync();
-        });
-
-        const unlistenSyncStatus = await listen("sync-status", (event: any) => {
-          const { title, message, type } = event.payload;
-          showToast(title, message, type);
-        });
-
-        return () => {
-          unlistenSyncTrigger();
-          unlistenSyncStatus();
-        };
-      };
-      
-      const unlistenPromise = setupListeners();
-      return () => {
-        unlistenPromise.then(f => f());
-      };
-    }
-  }, [isDbReady, showToast]);
 
   // ── SESSION LOGGING ──
   useEffect(() => {
@@ -127,11 +95,14 @@ function App() {
 
   const [roleColor, setRoleColor] = useState("#60a5fa"); // Default blue
 
-  // ── LOADING STATE ──
-  if (!isDbReady) {
+  // ── LOADING STATE (INITIAL BOOT) ──
+  if (dbStatus === "connecting" && !isLoggedIn) {
     return (
-      <main className="login-screen flex items-center justify-center">
-        <div className="login-spinner" style={{ width: 40, height: 40, borderWidth: 3 }} />
+      <main className="login-screen flex flex-col items-center justify-center gap-4 bg-[#0f172a]">
+        <div className="login-spinner" style={{ width: 48, height: 48, borderWidth: 4 }} />
+        <div className="text-[10px] font-black text-blue-400 uppercase tracking-[0.4em] animate-pulse">
+          Establishing Cloud Link...
+        </div>
       </main>
     );
   }
@@ -161,12 +132,13 @@ function App() {
           >
             <div className="flex items-center justify-center gap-3">
               <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />
-              Offline Mode — Sync Paused
+              Cloud Connection Lost — Data Localized
               <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />
             </div>
           </motion.div>
         )}
       </AnimatePresence>
+
       {/* ── LOGIN SCREEN ── */}
       {(!isLoggedIn || !user) ? (
         <main className="login-screen">

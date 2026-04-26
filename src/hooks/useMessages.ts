@@ -1,6 +1,4 @@
-import { useState, useEffect } from "react";
-import { getDb, resilientExecute } from "@/services/db";
-import { DataSyncService } from "@/services/syncService";
+import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 export interface Message {
@@ -16,68 +14,72 @@ export function useMessages(userId?: string) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchMessages = async () => {
+  const fetchMessages = useCallback(async () => {
     try {
-      const db = await getDb();
-      let query = "SELECT * FROM messages ORDER BY timestamp ASC";
-      let params: any[] = [];
+      // Fetch messages involving this user
+      const filter = userId ? {
+        "$or": [
+          { sender_id: userId },
+          { receiver_id: userId }
+        ]
+      } : undefined;
+
+      const res: any[] = await invoke("cloud_sync_get", { 
+        collectionName: "messages", 
+        filter 
+      });
       
-      if (userId) {
-        query = "SELECT * FROM messages WHERE sender_id = $1 OR receiver_id = $1 ORDER BY timestamp ASC";
-        params = [userId];
-      }
-      
-      const res = await db.select<Message[]>(query, params);
-      setMessages(res);
+      const sorted = res.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      setMessages(sorted);
     } catch (e) {
-      console.error(e);
+      console.error("Failed to fetch messages from MongoDB:", e);
     } finally {
       setLoading(false);
     }
-  };
+  }, [userId]);
 
   useEffect(() => {
     fetchMessages();
-    const interval = setInterval(fetchMessages, 5000); // Poll more frequently for chat
+    const interval = setInterval(fetchMessages, 5000); // Poll for chat
     return () => clearInterval(interval);
-  }, [userId]);
+  }, [fetchMessages]);
 
   const sendMessage = async (senderId: string, receiverId: string, content: string) => {
-    const id = `msg-${Date.now()}`;
-    let synced = 0;
+    const id = crypto.randomUUID();
     const now = new Date().toISOString();
+    const newMessage = {
+      id,
+      sender_id: senderId,
+      receiver_id: receiverId,
+      content,
+      timestamp: now,
+      is_read: 0
+    };
 
     try {
-      const result: any = await invoke("cloud_sync_post", { 
-        collectionName: "messages", 
-        data: [{ id, sender_id: senderId, receiver_id: receiverId, content, timestamp: now, is_read: 0 }] 
+      await invoke("cloud_sync_upsert", { 
+        collectionName: "messages",
+        id,
+        data: newMessage 
       });
-      if (result.success) synced = 1;
+      setMessages(prev => [...prev, newMessage as Message]);
     } catch (e) {
-      console.warn("Cloud message send failed via Rust, will sync later:", e);
+      console.error("Failed to send message to MongoDB:", e);
+      throw e;
     }
-
-    await resilientExecute(
-      "INSERT INTO messages (id, sender_id, receiver_id, content, synced, timestamp) VALUES ($1, $2, $3, $4, $5, datetime('now'))",
-      [id, senderId, receiverId, content, synced]
-    );
-    await fetchMessages();
-    if (synced === 0) DataSyncService.triggerSync();
   };
 
   const markAsRead = async (messageId: string) => {
-    let synced = 0;
     try {
-      const result: any = await invoke("cloud_sync_post", { 
-        collectionName: "messages", 
-        data: [{ id: messageId, is_read: 1 }] 
+      await invoke("cloud_sync_upsert", {
+        collectionName: "messages",
+        id: messageId,
+        data: { is_read: 1 }
       });
-      if (result.success) synced = 1;
-    } catch (e) { }
-
-    await resilientExecute("UPDATE messages SET is_read = 1, synced = $1 WHERE id = $2", [synced, messageId]);
-    await fetchMessages();
-    if (synced === 0) DataSyncService.triggerSync();
+      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, is_read: 1 } : m));
+    } catch (e) {
+      console.error("Failed to mark message as read in MongoDB:", e);
+    }
   };
 
   return { messages, loading, sendMessage, markAsRead, refresh: fetchMessages };

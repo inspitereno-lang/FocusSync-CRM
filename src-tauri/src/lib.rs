@@ -15,12 +15,31 @@ struct DbState {
 }
 
 #[tauri::command]
-async fn cloud_sync_get(state: State<'_, DbState>, collection_name: String) -> Result<Vec<Value>, String> {
+async fn check_db_status(state: State<'_, DbState>) -> Result<bool, String> {
     let db_guard = state.db.lock().await;
-    let db = db_guard.as_ref().ok_or("Database not initialized")?;
+    Ok(db_guard.is_some())
+}
+
+#[tauri::command]
+async fn cloud_sync_get(state: State<'_, DbState>, collection_name: String, filter: Option<Value>) -> Result<Vec<Value>, String> {
+    let db_guard = state.db.lock().await;
+    let db = db_guard.as_ref().ok_or("Cloud database not connected. Please check your internet or MONGODB_URI.")?;
     let collection = db.collection::<Document>(&collection_name);
 
-    let mut cursor = collection.find(None, None).await.map_err(|e| e.to_string())?;
+    let filter_doc = if let Some(f) = filter {
+        match bson::to_bson(&f).map_err(|e| e.to_string())? {
+            Bson::Document(d) => d,
+            _ => doc! {},
+        }
+    } else {
+        doc! { "is_deleted": { "$ne": 1 } }
+    };
+
+    let options = mongodb::options::FindOptions::builder()
+        .sort(doc! { "updated_at": -1, "time": -1, "timestamp": -1 })
+        .build();
+
+    let mut cursor = collection.find(filter_doc, options).await.map_err(|e| format!("MongoDB Find Error: {}", e))?;
     let mut results = Vec::new();
     while let Some(result) = cursor.next().await {
         match result {
@@ -28,16 +47,52 @@ async fn cloud_sync_get(state: State<'_, DbState>, collection_name: String) -> R
                 let json = serde_json::to_value(&doc).map_err(|e| e.to_string())?;
                 results.push(json);
             }
-            Err(e) => return Err(e.to_string()),
+            Err(e) => return Err(format!("Cursor Error: {}", e)),
         }
     }
     Ok(results)
 }
 
 #[tauri::command]
+async fn cloud_sync_upsert(state: State<'_, DbState>, collection_name: String, id: String, data: Value) -> Result<Value, String> {
+    let db_guard = state.db.lock().await;
+    let db = db_guard.as_ref().ok_or("Cloud database not connected")?;
+    let collection = db.collection::<Document>(&collection_name);
+
+    let mut bson_doc = match bson::to_bson(&data).map_err(|e| e.to_string())? {
+        Bson::Document(mut d) => {
+            d.insert("updated_at", mongodb::bson::DateTime::now());
+            d
+        }
+        _ => return Err("Invalid data format".to_string()),
+    };
+
+    let options = mongodb::options::UpdateOptions::builder().upsert(true).build();
+    collection.update_one(doc! { "id": id }, doc! { "$set": bson_doc }, options)
+        .await.map_err(|e| format!("MongoDB Update Error: {}", e))?;
+
+    Ok(serde_json::json!({ "success": true }))
+}
+
+#[tauri::command]
+async fn cloud_sync_delete(state: State<'_, DbState>, collection_name: String, id: String) -> Result<Value, String> {
+    let db_guard = state.db.lock().await;
+    let db = db_guard.as_ref().ok_or("Cloud database not connected")?;
+    let collection = db.collection::<Document>(&collection_name);
+
+    collection.update_one(
+        doc! { "id": id }, 
+        doc! { "$set": { "is_deleted": 1, "updated_at": mongodb::bson::DateTime::now() } }, 
+        None
+    ).await.map_err(|e| format!("MongoDB Delete Error: {}", e))?;
+
+    Ok(serde_json::json!({ "success": true }))
+}
+
+#[tauri::command]
 async fn cloud_sync_post(state: State<'_, DbState>, collection_name: String, data: Vec<Value>) -> Result<Value, String> {
     let db_guard = state.db.lock().await;
-    let db = db_guard.as_ref().ok_or("Database not initialized")?;
+    let db = db_guard.as_ref().ok_or("Cloud database not connected. Please check your internet or MONGODB_URI.")?;
     let collection = db.collection::<Document>(&collection_name);
 
     let mut processed = 0;
@@ -56,7 +111,7 @@ async fn cloud_sync_post(state: State<'_, DbState>, collection_name: String, dat
             let update = doc! { "$set": bson_doc };
             let options = mongodb::options::UpdateOptions::builder().upsert(true).build();
             
-            collection.update_one(filter, update, options).await.map_err(|e| e.to_string())?;
+            collection.update_one(filter, update, options).await.map_err(|e| format!("MongoDB Update Error: {}", e))?;
             processed += 1;
         }
     }
@@ -67,7 +122,7 @@ async fn cloud_sync_post(state: State<'_, DbState>, collection_name: String, dat
 #[tauri::command]
 async fn cloud_get_active_sessions(state: State<'_, DbState>) -> Result<Vec<Value>, String> {
     let db_guard = state.db.lock().await;
-    let db = db_guard.as_ref().ok_or("Database not initialized")?;
+    let db = db_guard.as_ref().ok_or("Cloud database not connected. Please check your internet or MONGODB_URI.")?;
     
     let five_minutes_ago = chrono::Utc::now() - chrono::Duration::minutes(5);
     let pipeline = vec![
@@ -111,7 +166,7 @@ async fn cloud_get_active_sessions(state: State<'_, DbState>) -> Result<Vec<Valu
 #[tauri::command]
 async fn cloud_manage_users(state: State<'_, DbState>, action: String, user: Value) -> Result<Value, String> {
     let db_guard = state.db.lock().await;
-    let db = db_guard.as_ref().ok_or("Database not initialized")?;
+    let db = db_guard.as_ref().ok_or("Cloud database not connected. Please check your internet or MONGODB_URI.")?;
     let collection = db.collection::<Document>("users");
 
     let id = user.get("id").and_then(|v| v.as_str()).ok_or("Missing user ID")?;
@@ -137,7 +192,7 @@ async fn cloud_manage_users(state: State<'_, DbState>, action: String, user: Val
 #[tauri::command]
 async fn cloud_get_proctoring_alerts(state: State<'_, DbState>) -> Result<Vec<Value>, String> {
     let db_guard = state.db.lock().await;
-    let db = db_guard.as_ref().ok_or("Database not initialized")?;
+    let db = db_guard.as_ref().ok_or("Cloud database not connected. Please check your internet or MONGODB_URI.")?;
     let collection = db.collection::<Document>("proctoring_events");
 
     let options = mongodb::options::FindOptions::builder()
@@ -159,7 +214,7 @@ async fn cloud_get_proctoring_alerts(state: State<'_, DbState>) -> Result<Vec<Va
 #[tauri::command]
 async fn cloud_manage_tasks(state: State<'_, DbState>, action: String, task: Value) -> Result<Value, String> {
     let db_guard = state.db.lock().await;
-    let db = db_guard.as_ref().ok_or("Database not initialized")?;
+    let db = db_guard.as_ref().ok_or("Cloud database not connected. Please check your internet or MONGODB_URI.")?;
     let collection = db.collection::<Document>("tasks");
 
     let id = task.get("id").and_then(|v| v.as_str()).ok_or("Missing task ID")?;
@@ -179,6 +234,17 @@ async fn cloud_manage_tasks(state: State<'_, DbState>, action: String, task: Val
             .await.map_err(|e| e.to_string())?;
     }
 
+    Ok(serde_json::json!({ "success": true }))
+}
+
+#[tauri::command]
+async fn cloud_clear_attendance_data(state: State<'_, DbState>) -> Result<Value, String> {
+    let db_guard = state.db.lock().await;
+    let db = db_guard.as_ref().ok_or("Cloud database not connected")?;
+    
+    db.collection::<Document>("sessions").delete_many(doc! {}, None).await.map_err(|e| e.to_string())?;
+    db.collection::<Document>("proctoring_events").delete_many(doc! {}, None).await.map_err(|e| e.to_string())?;
+    
     Ok(serde_json::json!({ "success": true }))
 }
 
@@ -203,16 +269,20 @@ pub fn run() {
     tauri::Builder::default()
         .manage(db_state)
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_sql::Builder::default().build())
         .setup(move |app| {
             // Initialize MongoDB Async
             let db_handle = db_arc.clone();
             tauri::async_runtime::spawn(async move {
                 if !mongo_uri.is_empty() {
-                    if let Ok(client) = Client::with_uri_str(&mongo_uri).await {
-                        let mut db_guard = db_handle.lock().await;
-                        *db_guard = Some(client.database("focussync"));
-                        println!("Rust: Connected to MongoDB Atlas");
+                    match Client::with_uri_str(&mongo_uri).await {
+                        Ok(client) => {
+                            let mut db_guard = db_handle.lock().await;
+                            *db_guard = Some(client.database("focussync"));
+                            println!("Rust: Connected to MongoDB Atlas");
+                        }
+                        Err(e) => {
+                            eprintln!("Rust: Failed to connect to MongoDB: {}", e);
+                        }
                     }
                 }
             });
@@ -220,8 +290,8 @@ pub fn run() {
             // Menu items for the tray
             let quit_i = MenuItem::with_id(app, "quit", "Quit FocusSync", true, None::<&str>)?;
             let show_i = MenuItem::with_id(app, "show", "Open Dashboard", true, None::<&str>)?;
-            let sync_i = MenuItem::with_id(app, "sync", "Force Cloud Sync", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_i, &sync_i, &quit_i])?;
+            let session_i = MenuItem::with_id(app, "session", "Session: Active", false, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&session_i, &show_i, &quit_i])?;
 
             let _tray = TrayIconBuilder::new()
                 .menu(&menu)
@@ -236,9 +306,6 @@ pub fn run() {
                             let _ = window.unminimize();
                             let _ = window.set_focus();
                         }
-                    }
-                    "sync" => {
-                        let _ = app.emit("sync-trigger", ());
                     }
                     _ => {}
                 })
@@ -265,10 +332,12 @@ pub fn run() {
             cloud_get_active_sessions,
             cloud_manage_users,
             cloud_get_proctoring_alerts,
-            cloud_manage_tasks
+            cloud_manage_tasks,
+            check_db_status,
+            cloud_sync_upsert,
+            cloud_sync_delete,
+            cloud_clear_attendance_data
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-
-

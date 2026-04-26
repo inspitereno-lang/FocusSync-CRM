@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { User, Lock, ArrowRight, Shield, Briefcase, ShieldCheck } from 'lucide-react';
+import { User, Lock, ArrowRight, Shield, Briefcase, ShieldCheck, Globe, CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react';
 import { FocusSyncLogo } from "./FocusSyncLogo";
+import { useAuth } from "@/context/AuthContext";
 
 // Vertex shader source code
 const vertexSmokeySource = `
@@ -213,6 +214,7 @@ export function LoginForm({
   onLogin: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   onRoleChange?: (role: "employee" | "manager" | "admin") => void;
 }) {
+  const { dbStatus } = useAuth();
   const [selectedRole, setSelectedRole] = useState<"employee" | "manager" | "admin">("employee");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -221,6 +223,10 @@ export function LoginForm({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (dbStatus !== "online") {
+      setError("Cloud connection not ready. Please wait.");
+      return;
+    }
     setIsLoading(true);
     setError("");
 
@@ -236,6 +242,26 @@ export function LoginForm({
 
   return (
     <div className="login-card">
+      {/* Cloud Status Badge */}
+      <div className="absolute top-4 right-4 flex items-center gap-2">
+        {dbStatus === "online" ? (
+          <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-black uppercase tracking-widest shadow-lg shadow-emerald-500/5">
+            <CheckCircle2 size={12} />
+            Online Entry Verified
+          </div>
+        ) : dbStatus === "connecting" ? (
+          <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[10px] font-black uppercase tracking-widest animate-pulse">
+            <Loader2 size={12} className="animate-spin" />
+            Connecting Cloud...
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-500/10 border border-red-500/20 text-red-400 text-[10px] font-black uppercase tracking-widest">
+            <Globe size={12} />
+            Cloud Offline
+          </div>
+        )}
+      </div>
+
       {/* Brand */}
       <div className="login-brand">
         <FocusSyncLogo 
@@ -244,6 +270,7 @@ export function LoginForm({
           color={selectedRole === 'admin' ? '#fbbf24' : selectedRole === 'manager' ? '#a78bfa' : '#60a5fa'} 
         />
         <h2 className="login-title">FocusSync</h2>
+        <div className="text-[10px] text-slate-500 uppercase tracking-[0.3em] font-bold mt-1 opacity-50">Secure Cloud Portal</div>
       </div>
 
       {/* Role Selection Tabs */}
@@ -277,6 +304,7 @@ export function LoginForm({
       {/* Error */}
       {error && (
         <div className="login-error">
+          <AlertTriangle size={14} className="inline mr-2" />
           {error}
         </div>
       )}
@@ -311,19 +339,26 @@ export function LoginForm({
 
         <button
           type="submit"
-          disabled={isLoading}
-          className={`login-submit ${selectedRole === "manager" ? "manager-submit" : selectedRole === "admin" ? "admin-submit" : "employee-submit"}`}
+          disabled={isLoading || dbStatus !== "online"}
+          className={`login-submit ${selectedRole === "manager" ? "manager-submit" : selectedRole === "admin" ? "admin-submit" : "employee-submit"} ${dbStatus !== "online" ? "opacity-50 grayscale" : ""}`}
         >
           {isLoading ? (
             <span className="login-spinner" />
           ) : (
             <>
-              Sign In as {selectedRole === "manager" ? "Manager" : selectedRole === "admin" ? "Admin" : "Employee"}
+              {dbStatus === "online" ? `Sign In as ${selectedRole === "manager" ? "Manager" : selectedRole === "admin" ? "Admin" : "Employee"}` : "Waiting for Cloud..."}
               <ArrowRight size={18} />
             </>
           )}
         </button>
       </form>
+
+      <div className="mt-8 pt-6 border-t border-white/5 text-center">
+        <p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest flex items-center justify-center gap-2">
+          <ShieldCheck size={10} className="text-emerald-500" />
+          End-to-End Encrypted Cloud Entry
+        </p>
+      </div>
 
     </div>
   );

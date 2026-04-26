@@ -1,47 +1,81 @@
 import { useTasks } from '../hooks/useTasks';
-import { getDb } from '../services/db';
 import { renderHook, act } from '@testing-library/react';
+import { invoke } from '@tauri-apps/api/core';
 
 // Mock dependency modules
-jest.mock('../services/db');
-jest.mock('../services/syncService');
+jest.mock('@tauri-apps/api/core', () => ({
+  invoke: jest.fn(),
+}));
 
-const mockDb = {
-  execute: jest.fn(),
-  select: jest.fn(),
-};
+jest.mock('../hooks/useActivities', () => ({
+  useActivities: () => ({
+    logActivity: jest.fn(),
+  }),
+}));
 
 describe('Task Management Hook Logic', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    (getDb as jest.Mock).mockResolvedValue(mockDb);
-    mockDb.select.mockResolvedValue([]); // Default empty tasks
+    (invoke as jest.Mock).mockResolvedValue([]); // Default empty tasks for cloud_sync_get
   });
 
-  it('should update the synced flag to 0 when updating a task', async () => {
+  it('should call cloud_sync_upsert when adding a task', async () => {
+    const { result } = renderHook(() => useTasks());
+    
+    const newTask = {
+      title: 'New Task',
+      status: 'pending' as const,
+      focus_time: 0,
+      priority: 'medium' as const,
+      assignee_email: 'test@example.com',
+      owner_email: 'manager@example.com',
+      due_date: null,
+      subtasks: [],
+      started_at: null,
+      is_running: false,
+    };
+
+    await act(async () => {
+      await result.current.addTask(newTask);
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      'cloud_sync_upsert',
+      expect.objectContaining({
+        collectionName: 'tasks',
+        id: expect.any(String),
+        data: expect.objectContaining({ title: 'New Task' }),
+      })
+    );
+  });
+
+  it('should call cloud_sync_upsert when updating a task', async () => {
     const { result } = renderHook(() => useTasks());
     
     await act(async () => {
       await result.current.updateTask('test-id', { title: 'Updated Title' });
     });
 
-    // Check if SQL query includes synced = 0
-    expect(mockDb.execute).toHaveBeenCalledWith(
-      expect.stringContaining('SET title = $1, synced = 0'),
-      expect.arrayContaining(['Updated Title', 'test-id'])
+    expect(invoke).toHaveBeenCalledWith(
+      'cloud_sync_upsert',
+      expect.objectContaining({
+        collectionName: 'tasks',
+        id: 'test-id',
+        data: { title: 'Updated Title' },
+      })
     );
   });
 
-  it('should set is_deleted to 1 and synced to 0 when deleting a task', async () => {
+  it('should call cloud_sync_delete when deleting a task', async () => {
     const { result } = renderHook(() => useTasks());
     
     await act(async () => {
       await result.current.deleteTask('delete-id');
     });
 
-    expect(mockDb.execute).toHaveBeenCalledWith(
-      expect.stringContaining('UPDATE tasks SET is_deleted = 1, synced = 0'),
-      ['delete-id']
+    expect(invoke).toHaveBeenCalledWith(
+      'cloud_sync_delete',
+      { collectionName: 'tasks', id: 'delete-id' }
     );
   });
 });

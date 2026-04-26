@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import { getDb, initDb } from "@/services/db";
-import { ActivityService } from "@/services/activityService";
+import { invoke } from "@tauri-apps/api/core";
+import { useActivities } from "@/hooks/useActivities";
 import bcrypt from "bcryptjs";
 
 // ── Types ──
@@ -13,7 +13,7 @@ export interface User {
   role: UserRole;
   initials: string;
   department: string;
-  avatar: string; // gradient color
+  avatar: string;
 }
 
 interface AuthContextType {
@@ -22,23 +22,50 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   isDbReady: boolean;
+  dbStatus: "connecting" | "online" | "offline";
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [isDbReady, setIsDbReady] = useState(false);
+  const [dbStatus, setDbStatus] = useState<"connecting" | "online" | "offline">("connecting");
+  const { logActivity } = useActivities();
 
   useEffect(() => {
-    initDb().then(() => setIsDbReady(true));
+    // Check MongoDB connection status
+    const checkConn = async () => {
+      try {
+        const connected = await invoke("check_db_status");
+        if (connected) {
+          setDbStatus("online");
+        } else {
+          setDbStatus("connecting");
+          // Retry after 2 seconds
+          setTimeout(checkConn, 2000);
+        }
+      } catch (e) {
+        console.error("Failed to check DB status:", e);
+        setDbStatus("offline");
+        setTimeout(checkConn, 5000);
+      }
+    };
+    checkConn();
   }, []);
 
   const login = async (email: string, password: string) => {
+    if (dbStatus !== "online") {
+      return { success: false, error: "Cloud database is not connected. Please wait." };
+    }
+
     try {
       const lowerEmail = email.toLowerCase().trim();
-      const db = await getDb();
-      const users = await db.select<any[]>("SELECT * FROM users WHERE email = $1 AND is_deleted = 0", [lowerEmail]);
+      
+      // Fetch user directly from MongoDB
+      const users: any[] = await invoke("cloud_sync_get", { 
+        collectionName: "users", 
+        filter: { email: lowerEmail } 
+      });
       
       if (users.length === 0) {
         return { success: false, error: "Account not found. Check your email." };
@@ -64,7 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         avatar: cred.avatar
       });
 
-      await ActivityService.logActivity({
+      await logActivity({
         user_name: cred.name,
         user_id: cred.id,
         action: "logged in",
@@ -72,15 +99,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
 
       return { success: true };
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      return { success: false, error: "Database error occurred." };
+      return { success: false, error: String(err) || "Connection error occurred." };
     }
   };
 
   const logout = () => {
     if (user) {
-      ActivityService.logActivity({
+      logActivity({
         user_name: user.name,
         user_id: user.id,
         action: "logged out",
@@ -91,7 +118,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, isLoggedIn: !!user, login, logout, isDbReady }}>
+    <AuthContext.Provider value={{ 
+      user, 
+      isLoggedIn: !!user, 
+      login, 
+      logout, 
+      isDbReady: dbStatus === "online",
+      dbStatus
+    }}>
       {children}
     </AuthContext.Provider>
   );

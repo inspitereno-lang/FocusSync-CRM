@@ -11,7 +11,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useTasks, Task } from "@/hooks/useTasks";
 import { useActivities } from "@/hooks/useActivities";
 import { TaskModal } from "@/components/ui/Modals";
-import { getDb } from "@/services/db";
+import { invoke } from "@tauri-apps/api/core";
 import AttendanceReport from "@/components/Proctoring/AttendanceReport";
 import { useMessages } from "@/hooks/useMessages";
 import { useUsers, SystemUser } from "@/hooks/useUsers";
@@ -138,7 +138,7 @@ export default function EmployeeDashboard() {
   const { user, logout } = useAuth();
   const [activeView, setActiveView] = useState("dashboard");
   const { tasks, addTask, updateTask, deleteTask } = useTasks(user?.email || "");
-  const { users } = useUsers();
+  const { users, updateUser: updateUserInfo } = useUsers();
   const { messages, sendMessage } = useMessages();
   const { activities, loading: activitiesLoading } = useActivities();
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
@@ -152,38 +152,35 @@ export default function EmployeeDashboard() {
   useEffect(() => {
     const fetchRecentSessions = async () => {
       if (!user) return;
-      const db = await getDb();
-      const res = await db.select<any[]>(
-        `SELECT login_time, logout_time, total_minutes 
-         FROM sessions 
-         WHERE user_id = $1 
-         ORDER BY login_time DESC 
-         LIMIT 5`, 
-        [user.id]
-      );
-      setRecentSessions(res || []);
+      try {
+        const res: any[] = await invoke("cloud_sync_get", { 
+          collectionName: "sessions",
+          filter: { user_id: user.id }
+        });
+        
+        const sorted = res.sort((a, b) => new Date(b.login_time).getTime() - new Date(a.login_time).getTime());
+        setRecentSessions(sorted.slice(0, 5));
 
-      // Calculate weekly data (last 7 days)
-      const weekRes = await db.select<any[]>(
-        `SELECT date(login_time) as day_date, SUM(total_minutes) as daily_mins 
-         FROM sessions 
-         WHERE user_id = $1 AND login_time >= date('now', '-7 days')
-         GROUP BY date(login_time)`,
-        [user.id]
-      );
-      
-      const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-      const currentData = Array(7).fill(0).map((_, i) => {
-        const d = new Date();
-        d.setDate(d.getDate() - (6 - i));
-        const dayStr = d.toISOString().split('T')[0];
-        const match = weekRes.find(r => r.day_date === dayStr);
-        return {
-          day: days[d.getDay()],
-          hours: match ? parseFloat((match.daily_mins / 60).toFixed(1)) : 0
-        };
-      });
-      setWeeklyData(currentData);
+        // Calculate weekly data (last 7 days)
+        const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const currentData = Array(7).fill(0).map((_, i) => {
+          const d = new Date();
+          d.setDate(d.getDate() - (6 - i));
+          const dateStr = d.toISOString().split('T')[0];
+          
+          const dailyMins = res
+            .filter(s => s.login_time.startsWith(dateStr))
+            .reduce((acc, s) => acc + (s.total_minutes || 0), 0);
+
+          return {
+            day: days[d.getDay()],
+            hours: parseFloat((dailyMins / 60).toFixed(1))
+          };
+        });
+        setWeeklyData(currentData);
+      } catch (e) {
+        console.error("Failed to fetch sessions from MongoDB:", e);
+      }
     };
     fetchRecentSessions();
     const interval = setInterval(fetchRecentSessions, 30000);
@@ -203,13 +200,19 @@ export default function EmployeeDashboard() {
   useEffect(() => {
     const fetchLiveStats = async () => {
       if (!user) return;
-      const db = await getDb();
-      const res = await db.select<any[]>("SELECT todayHours, focusScore FROM users WHERE id = $1", [user.id]);
-      if (res && res[0]) {
-        setLiveStats({
-          todayHours: res[0].todayHours || 0,
-          focusScore: res[0].focusScore || 90
+      try {
+        const res: any[] = await invoke("cloud_sync_get", { 
+          collectionName: "users",
+          filter: { id: user.id }
         });
+        if (res && res[0]) {
+          setLiveStats({
+            todayHours: res[0].todayHours || 0,
+            focusScore: res[0].focusScore || 90
+          });
+        }
+      } catch (e) {
+        console.error("Failed to fetch live stats:", e);
       }
     };
     fetchLiveStats();
@@ -239,13 +242,11 @@ export default function EmployeeDashboard() {
   const updateTodayHours = async (minutes: number) => {
     if (!user) return;
     try {
-      const db = await getDb();
-      // Fetch latest todayHours from DB to avoid overwriting with stale state
-      const res = await db.select<any[]>("SELECT todayHours FROM users WHERE id = $1", [user.id]);
+      const res: any[] = await invoke("cloud_sync_get", { collectionName: "users", filter: { id: user.id } });
       const currentHours = res[0]?.todayHours || 0;
       const newHours = currentHours + (minutes / 60);
       
-      await db.execute("UPDATE users SET todayHours = $1 WHERE id = $2", [newHours, user.id]);
+      await updateUserInfo(user.id, { todayHours: newHours });
       setLiveStats(prev => ({ ...prev, todayHours: newHours }));
     } catch (e) {
       console.error("Failed to update today hours:", e);
@@ -398,7 +399,13 @@ export default function EmployeeDashboard() {
         <div className="glass-card">
           <div className="section-title"><Clock size={16} className="text-purple-400" /> Recent Activity</div>
           <div className="space-y-4 text-xs text-slate-500 italic">
-            No recent activity logged.
+            {activities.filter(a => a.user_id === user?.id).slice(0, 5).map(a => (
+              <div key={a.id} className="flex items-center justify-between">
+                <span>{a.action}</span>
+                <span className="text-[10px] opacity-50">{new Date(a.time).toLocaleTimeString()}</span>
+              </div>
+            ))}
+            {activities.filter(a => a.user_id === user?.id).length === 0 && "No recent activity logged."}
           </div>
         </div>
       </div>
@@ -497,7 +504,7 @@ export default function EmployeeDashboard() {
         activities.filter(a => a.user_id === user?.id).map((a, i) => (
           <div key={a.id} className="activity-item">
             <div className={`activity-dot ${a.status}`}/>
-            <div><div className="activity-text">{a.action}</div><div className="activity-time">{a.time}</div></div>
+            <div><div className="activity-text">{a.action}</div><div className="activity-time">{new Date(a.time).toLocaleString()}</div></div>
           </div>
         ))
       ) : (

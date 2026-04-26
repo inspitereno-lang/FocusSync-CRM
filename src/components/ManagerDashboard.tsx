@@ -20,6 +20,7 @@ import { FocusSyncLogo } from "./ui/FocusSyncLogo";
 import { ToastContainer, ToastMessage, ToastType } from "./ui/Toast";
 import { useRef } from "react";
 import { APP_CONFIG } from "@/services/config";
+import { invoke } from "@tauri-apps/api/core";
 
 const WEEK = [{day:"Mon",hours:7.2},{day:"Tue",hours:6.8},{day:"Wed",hours:8.1},{day:"Thu",hours:5.4},{day:"Fri",hours:7.9},{day:"Sat",hours:3.2},{day:"Sun",hours:1.5}];
 
@@ -144,7 +145,6 @@ export default function ManagerDashboard() {
 
   const fetchAlerts = async () => {
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
       const res: any[] = await invoke("cloud_get_proctoring_alerts");
       const teamIds = TEAM.map(m => m.id);
       setProctoringAlerts(res.filter((a: any) => teamIds.includes(a.user_id)));
@@ -164,13 +164,19 @@ export default function ManagerDashboard() {
   useEffect(() => {
     const fetchLiveStats = async () => {
       if (!user) return;
-      const db = await (await import("@/services/db")).getDb();
-      const res = await db.select<any[]>("SELECT todayHours, focusScore FROM users WHERE id = $1", [user.id]);
-      if (res && res[0]) {
-        setLiveStats({
-          todayHours: res[0].todayHours || 0,
-          focusScore: res[0].focusScore || 90
+      try {
+        const res: any[] = await invoke("cloud_sync_get", { 
+          collectionName: "users", 
+          filter: { id: user.id } 
         });
+        if (res && res[0]) {
+          setLiveStats({
+            todayHours: res[0].todayHours || 0,
+            focusScore: res[0].focusScore || 90
+          });
+        }
+      } catch (e) {
+        console.error("Failed to fetch live stats from MongoDB:", e);
       }
     };
     fetchLiveStats();
@@ -312,7 +318,7 @@ export default function ManagerDashboard() {
                 <div className="w-1.5 h-1.5 rounded-full bg-blue-500 mt-1.5" />
                 <div>
                   <div className="text-xs font-medium text-slate-200">{a.action}</div>
-                  <div className="text-[10px] text-slate-500">{a.time}</div>
+                  <div className="text-[10px] text-slate-500">{new Date(a.time).toLocaleString()}</div>
                 </div>
               </div>
             )) : (
@@ -328,7 +334,7 @@ export default function ManagerDashboard() {
         </div>
         <div    className="glass-card">
           <div className="section-title"><PieChart size={16} className="text-blue-400"/> Team Performance</div>
-          <div className="progress-ring-container"><ProgressRing value={avgFocus} max={100} label="Focus" color="#3b82f6"/><ProgressRing value={Math.round((completed.length/tasks.length)*100)} max={100} label="Tasks" color="#8b5cf6"/><ProgressRing value={82} max={100} label="Efficiency" color="#10b981"/></div>
+          <div className="progress-ring-container"><ProgressRing value={avgFocus} max={100} label="Focus" color="#3b82f6"/><ProgressRing value={tasks.length > 0 ? Math.round((completed.length/tasks.length)*100) : 0} max={100} label="Tasks" color="#8b5cf6"/><ProgressRing value={82} max={100} label="Efficiency" color="#10b981"/></div>
           <div className="section-title" style={{marginTop:"1.5rem"}}><Zap size={16} className="text-amber-400"/> Quick Actions</div>
           <div className="quick-action-grid">
             {[{icon:<UserCheck size={16}/>,bg:"rgba(59,130,246,0.15)",color:"#60a5fa",text:"Check In",sub:"Mark attendance"},{icon:<Monitor size={16}/>,bg:"rgba(139,92,246,0.15)",color:"#a78bfa",text:"Screen Share",sub:"Start session"},{icon:<Coffee size={16}/>,bg:"rgba(251,191,36,0.15)",color:"#fbbf24",text:"Break Time",sub:"15 min break"},{icon:<Briefcase size={16}/>,bg:"rgba(16,185,129,0.15)",color:"#34d399",text:"New Project",sub:"Create project"}].map((qa,i)=>(<div key={i} className="quick-action"><div className="qa-icon" style={{background:qa.bg,color:qa.color}}>{qa.icon}</div><div><div className="qa-text">{qa.text}</div><div className="qa-sub">{qa.sub}</div></div></div>))}
@@ -803,100 +809,90 @@ export default function ManagerDashboard() {
             />
           </div>
         </div>
-        <div className="glass-card">
-          <div className="section-title"><Activity size={16} className="text-purple-400" /> Live Activity</div>
-          <div className="space-y-4">
-            {activities.slice(0, 5).map((a, i) => (
-              <div key={i} className="flex items-start gap-3">
-                <div className="w-1.5 h-1.5 rounded-full bg-blue-500 mt-1.5" />
-                <div>
-                  <div className="text-xs font-medium text-slate-200">{a.action}</div>
-                  <div className="text-[10px] text-slate-500">{a.time}</div>
+        <div className="space-y-4">
+          {filteredActivities.length > 0 ? filteredActivities.map((a, i) => (
+            <div key={i} className="activity-item group hover:bg-white/[0.02] transition-all p-3 rounded-xl border border-transparent hover:border-white/5">
+              <div className={`activity-dot ${a.status}`}/>
+              <div className="flex-1">
+                <div className="flex items-center justify-between mb-1">
+                  <div className="text-sm font-bold text-white group-hover:text-blue-400 transition-colors">{a.user_name}</div>
+                  <div className="text-[10px] text-slate-500 font-medium uppercase">{new Date(a.time).toLocaleString()}</div>
                 </div>
+                <div className="text-xs text-slate-400 italic">{a.action}</div>
               </div>
-            ))}
-          </div>
-        </div>
-        {filteredActivities.length > 0 ? filteredActivities.map(a=>(
-          <div key={a.id} className="activity-item">
-            <div className={`activity-dot ${a.status}`}/>
-            <div>
-              <div className="activity-text"><strong>{a.user_name}</strong> {a.action}</div>
-              <div className="activity-time">{a.time}</div>
             </div>
-          </div>
-        )) : (
-          <div className="py-12 text-center text-slate-600">No activity matching your search.</div>
-        )}
+          )) : (
+            <div className="py-12 text-center text-slate-600 text-sm italic">No activities match your search.</div>
+          )}
+        </div>
       </div>
     );
   };
 
   const renderPerformance = () => (
-    <div>
-      <div   className="glass-card" style={{marginBottom:"1.5rem"}}>
-        <div className="section-title"><Award size={16} className="text-yellow-400"/> Performance Rankings</div>
-        {[...TEAM].sort((a,b)=>(b.focusScore||0)-(a.focusScore||0)).map((m,i)=>(<div key={m.id} className="leaderboard-row"><div className={`leaderboard-rank ${i===0?"gold":i===1?"silver":i===2?"bronze":"other"}`}>{i+1}</div><div className="lb-avatar" style={{background:m.avatar}}>{m.initials}</div><div className="lb-info"><div className="lb-name">{m.name}</div><div className="lb-dept">{m.department} · {m.todayHours||0}h today</div></div><span className="lb-score">{m.focusScore||90}%</span></div>))}
-      </div>
-      <div className="module-grid-equal">
-        <div    className="glass-card">
-          <div className="section-title"><PieChart size={16} className="text-blue-400"/> Team Rings</div>
-          <div className="progress-ring-container"><ProgressRing value={avgFocus} max={100} label="Focus" color="#3b82f6"/><ProgressRing value={Math.round((completed.length/tasks.length)*100)} max={100} label="Tasks" color="#8b5cf6"/><ProgressRing value={82} max={100} label="Efficiency" color="#10b981"/></div>
+    <div className="glass-card">
+      <div className="section-title"><Award size={16} className="text-yellow-400"/> Performance Matrix</div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-6">
+        <div className="p-6 rounded-2xl bg-white/[0.02] border border-white/5">
+          <h4 className="text-sm font-bold text-white mb-4">Focus vs Integrity Trend</h4>
+          <div className="h-48 w-full bg-white/5 rounded-xl border border-dashed border-white/10 flex items-center justify-center">
+            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest opacity-30">Team Performance Visualization</span>
+          </div>
         </div>
-        <div    className="glass-card">
-          <div className="section-title"><TrendingUp size={16} className="text-emerald-400"/> Department Breakdown</div>
-          {["Engineering","Design","Marketing","Product","IT"].map((dept,i)=>{const members=TEAM.filter(m=>m.department===dept);const avg=members.length?Math.round(members.reduce((a,m)=>a+(m.focusScore||90),0)/members.length):0;return(<div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"0.6rem 0",borderBottom:"1px solid rgba(255,255,255,0.04)"}}><span style={{fontSize:"0.85rem",color:"#e2e8f0"}}>{dept}</span><div style={{display:"flex",alignItems:"center",gap:"0.75rem"}}><span style={{fontSize:"0.7rem",color:"#64748b"}}>{members.length} members</span><span style={{fontSize:"0.85rem",fontWeight:700,color:"#60a5fa"}}>{avg}%</span></div></div>);})}
+        <div className="p-6 rounded-2xl bg-white/[0.02] border border-white/5">
+          <h4 className="text-sm font-bold text-white mb-4">Task Completion Velocity</h4>
+          <div className="h-48 w-full bg-white/5 rounded-xl border border-dashed border-white/10 flex items-center justify-center">
+             <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest opacity-30">Velocity Metrics Chart</span>
+          </div>
         </div>
       </div>
     </div>
   );
 
   const renderSettings = () => (
-    <div   className="glass-card" style={{maxWidth:600}}>
-      <div className="section-title"><Settings size={16} className="text-gray-400"/> Manager Settings</div>
-      {[{label:"Full Name",value:user?.name||""},{label:"Email",value:user?.email||""},{label:"Department",value:user?.department||""},{label:"Role",value:"Manager"}].map((f,i)=>(<div key={i} style={{marginBottom:"1rem"}}><label style={{fontSize:"0.7rem",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.1em",color:"#64748b",display:"block",marginBottom:"0.35rem"}}>{f.label}</label><input className="inline-input" value={f.value} readOnly style={{opacity:0.7,cursor:"not-allowed"}}/></div>))}
-      <div style={{marginTop:"2rem",paddingTop:"1rem",borderTop:"1px solid rgba(255,255,255,0.06)"}}>
-        <div className="section-title"><Bell size={16} className="text-amber-400"/> Notifications</div>
-        {["Team alerts","Performance reports","Task deadline warnings"].map((n,i)=>(<div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"0.6rem 0",borderBottom:"1px solid rgba(255,255,255,0.04)"}}><span style={{fontSize:"0.85rem",color:"#e2e8f0"}}>{n}</span><div style={{width:40,height:22,borderRadius:11,background:"#3b82f6",position:"relative",cursor:"pointer"}}><div style={{width:16,height:16,borderRadius:"50%",background:"white",position:"absolute",top:3,right:3}}/></div></div>))}
+    <div className="glass-card" style={{maxWidth:600}}>
+      <div className="section-title"><Settings size={16} className="text-gray-400"/> Application Settings</div>
+      {[{label:"Management Node",value:"Cloud-Global-01"},{label:"Database Version",value:"MongoDB Atlas 7.0"},{label:"Organization",value:"FocusSync CRM Corporate"}].map((f,i)=>(<div key={i} style={{marginBottom:"1rem"}}><label style={{fontSize:"0.7rem",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.1em",color:"#64748b",display:"block",marginBottom:"0.35rem"}}>{f.label}</label><input className="inline-input" value={f.value} readOnly style={{opacity:0.7,cursor:"not-allowed"}}/></div>))}
+      <div className="mt-8 pt-8 border-t border-white/5">
+        <button onClick={logout} className="px-6 py-2 bg-red-600/10 text-red-400 border border-red-500/20 rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-red-600/20 transition-all">Full System Sign Out</button>
       </div>
     </div>
   );
 
   const renderAttendance = () => (
-    <div   style={{ maxWidth: 720 }}>
-      <AttendanceReport userId={user?.id || ""} />
+    <div style={{ maxWidth: 800 }}>
+       <AttendanceReport userId={user?.id || ""} />
     </div>
   );
 
   const renderIssues = () => {
     const issues = tasks.filter(t => t.has_issue);
     return (
-      <div   className="glass-card">
-        <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <AlertCircle size={16} className="text-red-400" /> Issues Raised by My Team
-        </div>
+      <div className="glass-card">
+        <div className="section-title"><AlertCircle size={16} className="text-red-400" /> Critical Blockers</div>
         <div className="space-y-4 mt-6">
-          {issues.map(task => (
-            <div key={task.id} className="p-5 rounded-2xl bg-red-500/5 border border-red-500/10 hover:bg-red-500/10 transition-all">
-               <div className="flex items-center justify-between mb-3">
-                 <div className="font-bold text-lg text-white">{task.title}</div>
-                 <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{task.assignee_email}</div>
-               </div>
-               <div className="text-sm text-slate-400 mb-5 leading-relaxed bg-black/20 p-4 rounded-xl border border-white/5">{task.issue_description || "No description provided."}</div>
-               <div className="flex gap-3">
-                 <button className="px-4 py-2 bg-blue-600/10 text-blue-400 text-xs font-bold rounded-xl border border-blue-500/20" onClick={() => { setEditingTask(task); setIsTaskModalOpen(true); }}>Edit Task</button>
-                 <button className="px-4 py-2 bg-emerald-600/10 text-emerald-400 text-xs font-bold rounded-xl border border-emerald-500/20" onClick={() => updateTask(task.id, { has_issue: false })}>Mark as Resolved</button>
-               </div>
+          {issues.length > 0 ? issues.map(t => (
+            <div key={t.id} className="p-4 rounded-xl bg-red-500/5 border border-red-500/10 flex items-start justify-between">
+              <div>
+                <div className="font-bold text-red-200 text-sm mb-1">{t.title}</div>
+                <div className="text-xs text-red-400/80 mb-3">Assigned to: {t.assignee_email}</div>
+                <div className="text-xs text-slate-300 italic p-3 bg-black/20 rounded-lg border border-red-500/5">{t.issue_description || "No description provided."}</div>
+              </div>
+              <button 
+                onClick={() => updateTask(t.id, { has_issue: false })}
+                className="px-3 py-1 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded text-[10px] font-bold uppercase"
+              >
+                Resolve
+              </button>
             </div>
-          ))}
-          {issues.length === 0 && <div className="py-20 text-center text-slate-500 italic">No issues reported by your team.</div>}
+          )) : (
+            <div className="py-12 text-center text-slate-600 italic">No critical issues reported by the team.</div>
+          )}
         </div>
       </div>
     );
   };
 
-  // ✅ FIX: Extracted into a proper React component to avoid useState-in-render-function
-  // violation (Rules of Hooks). State was being lost/reset on every navigation change.
   const renderCommunication = () => (
     <ManagerCommunicationPanel
       currentUser={user}
@@ -906,45 +902,62 @@ export default function ManagerDashboard() {
     />
   );
 
-  const views:Record<string,()=>React.JSX.Element>={dashboard:renderDashboard,tasks:renderTasks,team:renderTeam,attendance:renderAttendance,analytics:renderAnalytics,activity:renderActivity,performance:renderPerformance,issues:renderIssues,communication:renderCommunication,settings:renderSettings};
+  const views:Record<string,()=>React.JSX.Element>={dashboard:renderDashboard,tasks:renderTasks,team:renderTeam,attendance:renderAttendance,analytics:renderAnalytics,activity:renderActivity,performance:renderPerformance,settings:renderSettings,issues:renderIssues,communication:renderCommunication};
 
   return (
     <div className="app-shell">
-      <motion.aside    className="sidebar">
+      <motion.aside className="sidebar">
         <div className="sidebar-brand">
-          <FocusSyncLogo size={32} color="#a78bfa" />
+          <FocusSyncLogo size={32} color="#60a5fa" />
           <span style={{ 
             fontSize: "1.1rem", 
             fontWeight: 800, 
             letterSpacing: "-0.03em",
-            background: "linear-gradient(135deg, #fff 0%, #a78bfa 100%)",
+            background: "linear-gradient(135deg, #fff 0%, #60a5fa 100%)",
             WebkitBackgroundClip: "text",
             WebkitTextFillColor: "transparent"
           }}>
             FocusSync
           </span>
         </div>
-        <div className="nav-section-label">Main</div>
-        {navItems.slice(0,4).map(item=>(<div key={item.id} className={`nav-link ${activeView===item.id?"active":""}`} onClick={()=>setActiveView(item.id)}>{item.icon}<span>{item.label}</span></div>))}
-        <div className="nav-section-label">Analytics</div>
-        {navItems.slice(4,7).map(item=>(<div key={item.id} className={`nav-link ${activeView===item.id?"active":""}`} onClick={()=>setActiveView(item.id)}>{item.icon}<span>{item.label}</span></div>))}
+        <div className="nav-section-label">Management</div>
+        {navItems.slice(0,3).map(item=>(<div key={item.id} className={`nav-link ${activeView===item.id?"active":""}`} onClick={()=>setActiveView(item.id)}>{item.icon}<span>{item.label}</span></div>))}
+        <div className="nav-section-label">Insights</div>
+        {navItems.slice(3,8).map(item=>(<div key={item.id} className={`nav-link ${activeView===item.id?"active":""}`} onClick={()=>setActiveView(item.id)}>{item.icon}<span>{item.label}</span></div>))}
         <div className="nav-section-label">System</div>
-        <div className={`nav-link ${activeView==="settings"?"active":""}`} onClick={()=>setActiveView("settings")}><Settings size={18}/><span>Settings</span></div>
+        {navItems.slice(8).map(item=>(<div key={item.id} className={`nav-link ${activeView===item.id?"active":""}`} onClick={()=>setActiveView(item.id)}>{item.icon}<span>{item.label}</span></div>))}
+        
         <div className="sidebar-footer">
-          <div className="user-card"><div className="user-avatar" style={{background:user?.avatar||"#8b5cf6"}}>{user?.initials}</div><div className="user-details"><div className="user-name">{user?.name}</div><div className="user-role"></div></div></div>
+          <div className="user-card">
+            <div className="user-avatar" style={{background:user?.avatar}}>{user?.initials}</div>
+            <div className="user-details"><div className="user-name">{user?.name}</div><div className="user-role">Manager</div></div>
+          </div>
           <div className="nav-link" onClick={logout}><LogOut size={18}/><span>Sign Out</span></div>
         </div>
       </motion.aside>
       <div className="main-area">
-        <div className="page-header"><div><h1>{viewTitles[activeView]||"Dashboard"}</h1><div className="date-badge"><Calendar size={12} className="inline mr-1"/>{currentTime.toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})} · {currentTime.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit",second:"2-digit"})}</div></div><div className="flex items-center gap-3"><button className="btn-secondary"><Bell size={16}/></button><button className="btn-primary"><Eye size={16}/> Monitor Team</button></div></div>
-        {/* ✅ FIX: Removed key={activeView} — it caused full tree remount on every nav click (double-load) */}
+        <div className="page-header">
+          <div>
+            <h1>{viewTitles[activeView]||"Overview"}</h1>
+            <div className="date-badge"><Calendar size={12} className="inline mr-1"/>{currentTime.toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})} · {currentTime.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit",second:"2-digit"})}</div>
+          </div>
+          <div className="flex items-center gap-3">
+             <div className="flex -space-x-2 mr-4">
+                {TEAM.slice(0, 4).map(m => (
+                  <div key={m.id} title={m.name} className="w-8 h-8 rounded-full border-2 border-[#0f172a] flex items-center justify-center text-[10px] font-bold" style={{ background: m.avatar }}>{m.initials}</div>
+                ))}
+                {TEAM.length > 4 && <div className="w-8 h-8 rounded-full border-2 border-[#0f172a] bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-400">+{TEAM.length - 4}</div>}
+             </div>
+             <button className="btn-secondary relative"><Bell size={16}/>{proctoringAlerts.length > 0 && <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full shadow-[0_0_8px_rgba(239,68,68,0.5)]" />}</button>
+             <button className="btn-primary" onClick={() => { setEditingTask(null); setIsTaskModalOpen(true); }}><Plus size={16}/> New Task</button>
+          </div>
+        </div>
         <div className="flex-1 w-full h-full">
-          {(views[activeView]||renderDashboard)()}
+          {views[activeView] ? views[activeView]() : renderDashboard()}
         </div>
       </div>
-      <TaskModal isOpen={isTaskModalOpen} onClose={()=>setIsTaskModalOpen(false)} task={editingTask} onSave={handleSaveTask} users={TEAM} />
-      <UserModal isOpen={isUserModalOpen} onClose={()=>setIsUserModalOpen(false)} userToEdit={editingUser} onSave={handleSaveUser} forcedManagerId={user?.id} />
-      {/* Toasts */}
+      <TaskModal isOpen={isTaskModalOpen} onClose={()=>setIsTaskModalOpen(false)} task={editingTask} onSave={handleSaveTask} />
+      <UserModal isOpen={isUserModalOpen} onClose={()=>setIsUserModalOpen(false)} userToEdit={editingUser} onSave={handleSaveUser} />
       <ToastContainer toasts={toasts} onClose={removeToast} />
     </div>
   );
