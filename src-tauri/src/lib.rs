@@ -54,10 +54,16 @@ async fn cloud_sync_get(state: State<'_, DbState>, collection_name: String, filt
 }
 
 #[tauri::command]
-async fn cloud_sync_upsert(state: State<'_, DbState>, collection_name: String, id: String, data: Value) -> Result<Value, String> {
+async fn cloud_sync_upsert(state: State<'_, DbState>, collection_name: String, id: Value, data: Value) -> Result<Value, String> {
     let db_guard = state.db.lock().await;
     let db = db_guard.as_ref().ok_or("Cloud database not connected")?;
     let collection = db.collection::<Document>(&collection_name);
+
+    let id_str = match id {
+        Value::String(s) => s,
+        Value::Number(n) => n.to_string(),
+        _ => return Err("ID must be string or number".to_string()),
+    };
 
     let mut bson_doc = match bson::to_bson(&data).map_err(|e| e.to_string())? {
         Bson::Document(mut d) => {
@@ -68,23 +74,29 @@ async fn cloud_sync_upsert(state: State<'_, DbState>, collection_name: String, i
     };
 
     let options = mongodb::options::UpdateOptions::builder().upsert(true).build();
-    collection.update_one(doc! { "id": id }, doc! { "$set": bson_doc }, options)
+    collection.update_one(doc! { "id": id_str }, doc! { "$set": bson_doc }, options)
         .await.map_err(|e| format!("MongoDB Update Error: {}", e))?;
 
     Ok(serde_json::json!({ "success": true }))
 }
 
 #[tauri::command]
-async fn cloud_sync_delete(state: State<'_, DbState>, collection_name: String, id: String) -> Result<Value, String> {
+async fn cloud_sync_delete(state: State<'_, DbState>, collection_name: String, id: Value) -> Result<Value, String> {
     let db_guard = state.db.lock().await;
     let db = db_guard.as_ref().ok_or("Cloud database not connected")?;
     let collection = db.collection::<Document>(&collection_name);
 
+    let id_str = match id {
+        Value::String(s) => s,
+        Value::Number(n) => n.to_string(),
+        _ => return Err("ID must be string or number".to_string()),
+    };
+
     collection.update_one(
-        doc! { "id": id }, 
+        doc! { "id": id_str }, 
         doc! { "$set": { "is_deleted": 1, "updated_at": mongodb::bson::DateTime::now() } }, 
         None
-    ).await.map_err(|e| format!("MongoDB Delete Error: {}", e))?;
+    ).await.map_err(|e| e.to_string())?;
 
     Ok(serde_json::json!({ "success": true }))
 }
