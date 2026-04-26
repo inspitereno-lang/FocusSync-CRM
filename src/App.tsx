@@ -16,6 +16,7 @@ function App() {
   const { user, isLoggedIn, login, logout, isDbReady, dbStatus } = useAuth();
   const [isCalibrated, setIsCalibrated] = useState(false);
   const [isOnline, setIsOnline] = useState(window.navigator.onLine);
+  const [todayTotalMins, setTodayTotalMins] = useState(0);
   const { updateSessionStats, logSessionStart, logSessionEnd, logPing } = useAttendance();
   const sessionStartedRef = useRef(false);
   const lastUpdateRef = useRef(Date.now());
@@ -47,6 +48,19 @@ function App() {
       
       logSessionStart(user.id);
       sessionStartedRef.current = true;
+      
+      // Fetch initial today's total
+      const fetchTodayInitial = async () => {
+        try {
+          const today = new Date().toISOString().split('T')[0];
+          const res: any[] = await invoke("cloud_sync_get", { collectionName: "sessions", filter: { user_id: user.id } });
+          const total = res
+            .filter(s => s.login_time && s.login_time.startsWith(today))
+            .reduce((acc, s) => acc + (s.total_minutes || 0), 0);
+          setTodayTotalMins(total);
+        } catch (e) { console.error(e); }
+      };
+      fetchTodayInitial();
       
       // Ping every 2 minutes to keep session active
       pingInterval = setInterval(() => {
@@ -87,6 +101,7 @@ function App() {
         activeSeconds: Math.round(statsBufferRef.current.activeSeconds),
         integrityScore: 100 // Integrity logic for tab/paste removed per request
       });
+      setTodayTotalMins(prev => prev + (deltaSeconds / 60));
       statsBufferRef.current.keystrokes = currentKeystrokes;
       statsBufferRef.current.faceMissingSeconds = 0;
       statsBufferRef.current.activeSeconds = 0;
@@ -170,6 +185,25 @@ function App() {
             />
           )}
           {dashboard}
+          
+          {/* ── LIVE HOURS BADGE ── */}
+          <div className="fixed bottom-6 right-6 z-[9999] pointer-events-none">
+            <div className="glass-card p-3 flex flex-col gap-1 border-blue-500/30 bg-blue-500/5 shadow-2xl backdrop-blur-xl">
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Active Session</span>
+              </div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-2xl font-black text-white tracking-tighter">
+                  {Math.floor(todayTotalMins)}h {Math.round((todayTotalMins % 1) * 60)}m
+                </span>
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">Today</span>
+              </div>
+              <div className="text-[9px] text-blue-400 font-bold uppercase tracking-wider opacity-70">
+                Tracking Focus...
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </>

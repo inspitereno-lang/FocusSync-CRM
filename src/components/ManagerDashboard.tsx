@@ -165,16 +165,20 @@ export default function ManagerDashboard() {
     const fetchLiveStats = async () => {
       if (!user) return;
       try {
+        const today = new Date().toISOString().split('T')[0];
         const res: any[] = await invoke("cloud_sync_get", { 
-          collectionName: "users", 
-          filter: { id: user.id } 
+          collectionName: "sessions",
+          filter: { user_id: user.id }
         });
-        if (res && res[0]) {
-          setLiveStats({
-            todayHours: res[0].todayHours || 0,
-            focusScore: res[0].focusScore || 90
-          });
-        }
+        
+        const todayMins = res
+          .filter(s => s.login_time && s.login_time.startsWith(today))
+          .reduce((acc, s) => acc + (s.total_minutes || 0), 0);
+          
+        setLiveStats({
+          todayHours: todayMins / 60,
+          focusScore: 92
+        });
       } catch (e) {
         console.error("Failed to fetch live stats from MongoDB:", e);
       }
