@@ -30,11 +30,17 @@ export function ToastContainer({ toasts, onClose }: ToastProps) {
           >
             <div className={`
               glass-card min-w-[320px] p-4 flex items-start gap-4 border border-white/10
-              ${toast.type === 'status' ? 'bg-blue-500/10' : ''}
-              ${toast.type === 'success' ? 'bg-emerald-500/10' : ''}
-              ${toast.type === 'error' ? 'bg-red-500/10' : ''}
-             shadow-2xl backdrop-blur-xl
+              ${toast.type === 'status' ? 'bg-blue-500/10 shadow-[0_0_20px_rgba(59,130,246,0.15)]' : ''}
+              ${toast.type === 'success' ? 'bg-emerald-500/10 shadow-[0_0_20px_rgba(16,185,129,0.15)]' : ''}
+              ${toast.type === 'error' ? 'bg-red-500/10 shadow-[0_0_20px_rgba(239,68,68,0.15)]' : ''}
+              ${toast.type === 'info' ? 'bg-purple-500/10 shadow-[0_0_20px_rgba(167,139,250,0.15)]' : ''}
+              shadow-2xl backdrop-blur-xl relative overflow-hidden
             `}>
+              <div className="absolute top-0 left-0 w-1 h-full bg-current opacity-50" style={{ 
+                backgroundColor: toast.type === 'success' ? '#10b981' : 
+                                toast.type === 'error' ? '#ef4444' : 
+                                toast.type === 'info' ? '#a78bfa' : '#3b82f6' 
+              }} />
               <div className={`p-2 rounded-lg 
                 ${toast.type === 'status' ? 'bg-blue-500/20 text-blue-400' : ''}
                 ${toast.type === 'success' ? 'bg-emerald-500/20 text-emerald-400' : ''}

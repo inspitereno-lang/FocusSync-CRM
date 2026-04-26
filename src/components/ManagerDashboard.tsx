@@ -144,15 +144,12 @@ export default function ManagerDashboard() {
 
   const fetchAlerts = async () => {
     try {
-      const response = await fetch(`${APP_CONFIG.CLOUD_API_BASE}/proctoring-alerts`);
-      if (response.ok) {
-        const data = await response.json();
-        // Filter alerts for team members only
-        const teamIds = TEAM.map(m => m.id);
-        setProctoringAlerts(data.filter((a: any) => teamIds.includes(a.user_id)));
-      }
-    } catch (err) {
-      console.error("Failed to fetch alerts:", err);
+      const { invoke } = await import("@tauri-apps/api/core");
+      const res: any[] = await invoke("cloud_get_proctoring_alerts");
+      const teamIds = TEAM.map(m => m.id);
+      setProctoringAlerts(res.filter((a: any) => teamIds.includes(a.user_id)));
+    } catch (e) {
+      console.error("Failed to fetch proctoring alerts via Rust:", e);
     }
   };
 

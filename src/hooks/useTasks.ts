@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { getDb, resilientExecute } from "@/services/db";
 import { DataSyncService } from "@/services/syncService";
+import { invoke } from "@tauri-apps/api/core";
 import { useActivities } from "./useActivities";
-import { APP_CONFIG, getApiUrl } from "@/services/config";
 
 export interface SubTask {
   id: string;
@@ -40,23 +40,20 @@ export function useTasks(emailFilter?: string) {
   const fetchTasks = useCallback(async (isCloud: boolean = false) => {
     try {
       if (isCloud) {
-        const url = getApiUrl("/tasks");
-        const response = await fetch(url);
-        if (response.ok) {
-          const res = await response.json();
-          const safeParse = (val: any) => {
-            if (!val) return [];
-            if (typeof val !== 'string') return Array.isArray(val) ? val : [];
-            try { return JSON.parse(val); } catch { return []; }
-          };
-          const parsedCloudTasks: Task[] = res.map((t: any) => ({
-            ...t,
-            subtasks: safeParse(t.subtasks),
-            is_running: !!t.is_running
-          }));
-          setTasks(parsedCloudTasks);
-          return;
-        }
+        // ✅ Call native Rust command
+        const res: any[] = await invoke("cloud_sync_get", { collectionName: "tasks" });
+        const safeParse = (val: any) => {
+          if (!val) return [];
+          if (typeof val !== 'string') return Array.isArray(val) ? val : [];
+          try { return JSON.parse(val); } catch { return []; }
+        };
+        const parsedCloudTasks: Task[] = res.map((t: any) => ({
+          ...t,
+          subtasks: safeParse(t.subtasks),
+          is_running: !!t.is_running
+        }));
+        setTasks(parsedCloudTasks);
+        return;
       }
 
       const db = await getDb();
@@ -80,7 +77,7 @@ export function useTasks(emailFilter?: string) {
       }));
       setTasks(parsedTasks);
     } catch (e) {
-      console.error(e);
+      console.error("Failed to fetch tasks via Rust bridge:", e);
     } finally {
       setLoading(false);
     }
@@ -96,39 +93,24 @@ export function useTasks(emailFilter?: string) {
     const id = crypto.randomUUID();
     let synced = 0;
 
-    // 1. Try Cloud Update First
     try {
-      const response = await fetch(getApiUrl("/tasks/manage"), {
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${APP_CONFIG.AUTH_TOKEN}`
-        },
-        body: JSON.stringify({ action: "upsert", task: { id, ...task } })
+      // ✅ Call native Rust command
+      const result: any = await invoke("cloud_manage_tasks", { 
+        action: "upsert", 
+        task: { id, ...task } 
       });
-      if (response.ok) {
-        synced = 1;
-      }
+      if (result.success) synced = 1;
     } catch (e) {
-      console.warn("Cloud add failed, will sync later:", e);
+      console.warn("Cloud add failed via Rust, will sync later:", e);
     }
 
-    // 2. Local Update (Fallback/Cache)
     const db = await getDb();
     await resilientExecute(
       "INSERT INTO tasks (id, title, description, status, focus_time, priority, assignee_email, owner_email, due_date, subtasks, created_at, updated_at, synced) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, datetime('now'), datetime('now'), $11)",
       [
-        id, 
-        task.title, 
-        task.description || "", 
-        task.status, 
-        task.focus_time || 0, 
-        task.priority, 
-        task.assignee_email, 
-        task.owner_email, 
-        task.due_date, 
-        JSON.stringify(task.subtasks || []),
-        synced
+        id, task.title, task.description || "", task.status, task.focus_time || 0, 
+        task.priority, task.assignee_email, task.owner_email, task.due_date, 
+        JSON.stringify(task.subtasks || []), synced
       ]
     );
     
@@ -146,24 +128,17 @@ export function useTasks(emailFilter?: string) {
   const updateTask = async (id: string, updates: Partial<Task>) => {
     let synced = 0;
 
-    // 1. Try Cloud Update First
     try {
-      const response = await fetch(getApiUrl("/tasks/manage"), {
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${APP_CONFIG.AUTH_TOKEN}`
-        },
-        body: JSON.stringify({ action: "upsert", task: { id, ...updates } })
+      // ✅ Call native Rust command
+      const result: any = await invoke("cloud_manage_tasks", { 
+        action: "upsert", 
+        task: { id, ...updates } 
       });
-      if (response.ok) {
-        synced = 1;
-      }
+      if (result.success) synced = 1;
     } catch (e) {
-      console.warn("Cloud update failed, will sync later:", e);
+      console.warn("Cloud update failed via Rust, will sync later:", e);
     }
 
-    // 2. Local Update
     const db = await getDb();
     const validCols = [
       'title', 'description', 'status', 'focus_time', 'priority', 
@@ -209,24 +184,14 @@ export function useTasks(emailFilter?: string) {
   const deleteTask = async (id: string) => {
     let synced = 0;
 
-    // 1. Try Cloud Update First
     try {
-      const response = await fetch(getApiUrl("/tasks/manage"), {
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${APP_CONFIG.AUTH_TOKEN}`
-        },
-        body: JSON.stringify({ action: "delete", task: { id } })
-      });
-      if (response.ok) {
-        synced = 1;
-      }
+      // ✅ Call native Rust command
+      const result: any = await invoke("cloud_manage_tasks", { action: "delete", task: { id } });
+      if (result.success) synced = 1;
     } catch (e) {
-      console.warn("Cloud delete failed, will sync later:", e);
+      console.warn("Cloud delete failed via Rust, will sync later:", e);
     }
 
-    // 2. Local Update
     const db = await getDb();
     await resilientExecute("UPDATE tasks SET is_deleted = 1, synced = $1, updated_at = datetime('now') WHERE id = $2", [synced, id]);
     await fetchTasks();

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { getDb, resilientExecute } from "@/services/db";
 import { DataSyncService } from "@/services/syncService";
-import { APP_CONFIG, getApiUrl } from "@/services/config";
+import { invoke } from "@tauri-apps/api/core";
 
 export interface Session {
   id: string;
@@ -28,13 +28,10 @@ export function useAttendance() {
   const fetchActiveStatus = useCallback(async (isCloud: boolean = false) => {
     try {
       if (isCloud) {
-        const url = getApiUrl("/active-sessions");
-        const response = await fetch(url);
-        if (response.ok) {
-          const res = await response.json();
-          setActiveSessions(res);
-          return;
-        }
+        // ✅ Call native Rust command
+        const res: any[] = await invoke("cloud_get_active_sessions");
+        setActiveSessions(res);
+        return;
       }
       
       const db = await getDb();
@@ -48,20 +45,17 @@ export function useAttendance() {
       `);
       setActiveSessions(res);
     } catch (e) {
-      console.error("Failed to fetch active status", e);
+      console.error("Failed to fetch active status via Rust:", e);
     }
   }, []);
 
   const fetchAlerts = useCallback(async (isCloud: boolean = false) => {
     try {
       if (isCloud) {
-        const url = getApiUrl("/proctoring-alerts");
-        const response = await fetch(url);
-        if (response.ok) {
-          const res = await response.json();
-          setProctoringAlerts(res);
-          return;
-        }
+        // ✅ Call native Rust command
+        const res: any[] = await invoke("cloud_get_proctoring_alerts");
+        setProctoringAlerts(res);
+        return;
       }
 
       const db = await getDb();
@@ -75,7 +69,7 @@ export function useAttendance() {
       `);
       setProctoringAlerts(res);
     } catch (e) {
-      console.error("Failed to fetch alerts", e);
+      console.error("Failed to fetch alerts via Rust:", e);
     }
   }, []);
 
@@ -83,27 +77,17 @@ export function useAttendance() {
     const id = crypto.randomUUID();
     let synced = 0;
 
-    // 1. Try Cloud Update First
     try {
-      const response = await fetch(getApiUrl("/sync"), {
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${APP_CONFIG.AUTH_TOKEN}`
-        },
-        body: JSON.stringify({ 
-          collection: "sessions", 
-          data: [{ id, user_id: userId, login_time: new Date().toISOString(), last_ping: new Date().toISOString(), logout_time: null }] 
-        })
+      // ✅ Call native Rust command
+      const result: any = await invoke("cloud_sync_post", { 
+        collectionName: "sessions", 
+        data: [{ id, user_id: userId, login_time: new Date().toISOString(), last_ping: new Date().toISOString(), logout_time: null }] 
       });
-      if (response.ok) {
-        synced = 1;
-      }
+      if (result.success) synced = 1;
     } catch (e) {
-      console.warn("Cloud session start failed, will sync later:", e);
+      console.warn("Cloud session start failed via Rust, will sync later:", e);
     }
 
-    // 2. Local Update
     await resilientExecute(
       "INSERT INTO sessions (id, user_id, login_time, last_ping, synced) VALUES ($1, $2, datetime('now'), datetime('now'), $3)",
       [id, userId, synced]
@@ -113,25 +97,17 @@ export function useAttendance() {
 
   const logPing = async (userId: string) => {
     const db = await getDb();
-    // Get active session
     const active = await db.select<any[]>("SELECT id FROM sessions WHERE user_id = $1 AND logout_time IS NULL LIMIT 1", [userId]);
     if (active.length === 0) return;
     const sessionId = active[0].id;
 
     let synced = 0;
     try {
-      const response = await fetch(getApiUrl("/sync"), {
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${APP_CONFIG.AUTH_TOKEN}`
-        },
-        body: JSON.stringify({ 
-          collection: "sessions", 
-          data: [{ id: sessionId, last_ping: new Date().toISOString() }] 
-        })
+      const result: any = await invoke("cloud_sync_post", { 
+        collectionName: "sessions", 
+        data: [{ id: sessionId, last_ping: new Date().toISOString() }] 
       });
-      if (response.ok) synced = 1;
+      if (result.success) synced = 1;
     } catch (e) { }
 
     await resilientExecute(
@@ -142,7 +118,6 @@ export function useAttendance() {
 
   const logSessionEnd = async (userId: string) => {
     const db = await getDb();
-    // Get active session
     const active = await db.select<any[]>("SELECT id FROM sessions WHERE user_id = $1 AND logout_time IS NULL LIMIT 1", [userId]);
     if (active.length === 0) return;
     const sessionId = active[0].id;
@@ -150,18 +125,11 @@ export function useAttendance() {
     let synced = 0;
     const now = new Date().toISOString();
     try {
-      const response = await fetch(getApiUrl("/sync"), {
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${APP_CONFIG.AUTH_TOKEN}`
-        },
-        body: JSON.stringify({ 
-          collection: "sessions", 
-          data: [{ id: sessionId, logout_time: now }] 
-        })
+      const result: any = await invoke("cloud_sync_post", { 
+        collectionName: "sessions", 
+        data: [{ id: sessionId, logout_time: now }] 
       });
-      if (response.ok) synced = 1;
+      if (result.success) synced = 1;
     } catch (e) { }
 
     await resilientExecute(
@@ -180,27 +148,19 @@ export function useAttendance() {
 
       let synced = 0;
       try {
-        const response = await fetch(getApiUrl("/sync"), {
-          method: "POST",
-          headers: { 
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${APP_CONFIG.AUTH_TOKEN}`
-          },
-          body: JSON.stringify({ 
-            collection: "sessions", 
-            data: [{ 
-              id: session.id, 
-              total_keystrokes: session.total_keystrokes + stats.keystrokes,
-              face_missing_duration: session.face_missing_duration + stats.faceMissingSeconds,
-              total_minutes: session.total_minutes + (stats.activeSeconds / 60.0),
-              integrity_score: stats.integrityScore
-            }] 
-          })
+        const result: any = await invoke("cloud_sync_post", { 
+          collectionName: "sessions", 
+          data: [{ 
+            id: session.id, 
+            total_keystrokes: session.total_keystrokes + stats.keystrokes,
+            face_missing_duration: session.face_missing_duration + stats.faceMissingSeconds,
+            total_minutes: session.total_minutes + (stats.activeSeconds / 60.0),
+            integrity_score: stats.integrityScore
+          }] 
         });
-        if (response.ok) synced = 1;
+        if (result.success) synced = 1;
       } catch (e) { }
 
-      // Update session stats
       await resilientExecute(
         `UPDATE sessions 
          SET total_keystrokes = total_keystrokes + $1, 
@@ -212,7 +172,6 @@ export function useAttendance() {
         [stats.keystrokes, stats.faceMissingSeconds, stats.activeSeconds, stats.integrityScore, synced, session.id]
       );
 
-      // Update user's todayHours
       await resilientExecute(
         `UPDATE users 
          SET todayHours = todayHours + ($1 / 3600.0)
@@ -232,21 +191,13 @@ export function useAttendance() {
     const now = new Date().toISOString();
 
     try {
-      const response = await fetch(getApiUrl("/sync"), {
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${APP_CONFIG.AUTH_TOKEN}`
-        },
-        body: JSON.stringify({ 
-          collection: "proctoring", 
-          data: [{ id, user_id: userId, event_type: type, duration_seconds: duration, start_time: now }] 
-        })
+      const result: any = await invoke("cloud_sync_post", { 
+        collectionName: "proctoring", 
+        data: [{ id, user_id: userId, event_type: type, duration_seconds: duration, start_time: now }] 
       });
-      if (response.ok) synced = 1;
+      if (result.success) synced = 1;
     } catch (e) { }
 
-    const db = await getDb();
     await resilientExecute(
       "INSERT INTO proctoring_events (id, user_id, event_type, duration_seconds, synced, start_time) VALUES ($1, $2, $3, $4, $5, datetime('now'))",
       [id, userId, type, duration, synced]
@@ -260,14 +211,7 @@ export function useAttendance() {
       const db = await getDb();
       const res = await db.select<any[]>(`
         SELECT
-          u.id,
-          u.name,
-          u.email,
-          u.role,
-          u.department,
-          u.avatar,
-          u.initials,
-          u.status,
+          u.id, u.name, u.email, u.role, u.department, u.avatar, u.initials, u.status,
           COALESCE(SUM(s.total_minutes), 0)                          AS total_minutes,
           COALESCE(SUM(s.total_keystrokes), 0)                       AS total_keystrokes,
           COALESCE(SUM(s.face_missing_duration), 0)                  AS face_missing_duration,
@@ -295,15 +239,7 @@ export function useAttendance() {
   };
 
   return {
-    activeSessions,
-    proctoringAlerts,
-    fetchActiveStatus,
-    fetchAlerts,
-    logSessionStart,
-    logPing,
-    logSessionEnd,
-    logProctoringEvent,
-    updateSessionStats,
-    fetchAllUserStats
+    activeSessions, proctoringAlerts, fetchActiveStatus, fetchAlerts, logSessionStart,
+    logPing, logSessionEnd, logProctoringEvent, updateSessionStats, fetchAllUserStats
   };
 }

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { getDb, resilientExecute } from "@/services/db";
 import { DataSyncService } from "@/services/syncService";
-import { APP_CONFIG, getApiUrl } from "@/services/config";
+import { invoke } from "@tauri-apps/api/core";
 
 export interface Message {
   id: string;
@@ -47,28 +47,16 @@ export function useMessages(userId?: string) {
     let synced = 0;
     const now = new Date().toISOString();
 
-    // 1. Try Cloud Update First
     try {
-      const url = getApiUrl("/sync");
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${APP_CONFIG.AUTH_TOKEN}`
-        },
-        body: JSON.stringify({ 
-          collection: "messages", 
-          data: [{ id, sender_id: senderId, receiver_id: receiverId, content, timestamp: now, is_read: 0 }] 
-        })
+      const result: any = await invoke("cloud_sync_post", { 
+        collectionName: "messages", 
+        data: [{ id, sender_id: senderId, receiver_id: receiverId, content, timestamp: now, is_read: 0 }] 
       });
-      if (response.ok) {
-        synced = 1;
-      }
+      if (result.success) synced = 1;
     } catch (e) {
-      console.warn("Cloud message send failed, will sync later:", e);
+      console.warn("Cloud message send failed via Rust, will sync later:", e);
     }
 
-    // 2. Local Update
     await resilientExecute(
       "INSERT INTO messages (id, sender_id, receiver_id, content, synced, timestamp) VALUES ($1, $2, $3, $4, $5, datetime('now'))",
       [id, senderId, receiverId, content, synced]
@@ -80,19 +68,11 @@ export function useMessages(userId?: string) {
   const markAsRead = async (messageId: string) => {
     let synced = 0;
     try {
-      const url = getApiUrl("/sync");
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${APP_CONFIG.AUTH_TOKEN}`
-        },
-        body: JSON.stringify({ 
-          collection: "messages", 
-          data: [{ id: messageId, is_read: 1 }] 
-        })
+      const result: any = await invoke("cloud_sync_post", { 
+        collectionName: "messages", 
+        data: [{ id: messageId, is_read: 1 }] 
       });
-      if (response.ok) synced = 1;
+      if (result.success) synced = 1;
     } catch (e) { }
 
     await resilientExecute("UPDATE messages SET is_read = 1, synced = $1 WHERE id = $2", [synced, messageId]);

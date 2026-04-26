@@ -48,8 +48,7 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VITE_API_URL: ${{ secrets.VITE_API_URL }}
-          VITE_AUTH_TOKEN: ${{ secrets.VITE_AUTH_TOKEN }}
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
         with:
           tagName: app-v__VERSION__
           releaseName: "FocusSync v__VERSION__"

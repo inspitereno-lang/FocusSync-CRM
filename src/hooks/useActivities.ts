@@ -1,15 +1,15 @@
 import { useState, useEffect, useCallback } from "react";
 import { getDb } from "@/services/db";
-import { ActivityService, ActivityLog } from "@/services/activityService";
+import { ActivityService, Activity } from "@/services/activityService";
 
 export function useActivities() {
-  const [activities, setActivities] = useState<ActivityLog[]>([]);
+  const [activities, setActivities] = useState<Activity[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchActivities = useCallback(async () => {
     try {
       const db = await getDb();
-      const res = await db.select<ActivityLog[]>(
+      const res = await db.select<Activity[]>(
         "SELECT * FROM activities ORDER BY time DESC LIMIT 20"
       );
       
@@ -31,7 +31,7 @@ export function useActivities() {
     }
   }, []);
 
-  const logActivity = async (activity: Omit<ActivityLog, "id" | "time">) => {
+  const logActivity = async (activity: Omit<Activity, "id" | "time">) => {
     await ActivityService.logActivity(activity);
     await fetchActivities();
   };

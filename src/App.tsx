@@ -9,6 +9,7 @@ import GazeCalibration from "@/components/Proctoring/GazeCalibration";
 import ProctoringTracker from "@/components/Proctoring/ProctoringTracker";
 import { DataSyncService } from "@/services/syncService";
 import { useAttendance } from "@/hooks/useAttendance";
+import { useToasts } from "@/components/ui/ToastContext";
 import "./App.css";
 import { useEffect, useRef } from "react";
 
@@ -36,24 +37,37 @@ function App() {
     };
   }, []);
 
+  const { showToast } = useToasts();
+
   // ── START CLOUD SYNC ──
   useEffect(() => {
     if (isDbReady) {
       DataSyncService.startSync();
       
-      const setupListener = async () => {
+      const setupListeners = async () => {
         const { listen } = await import("@tauri-apps/api/event");
-        return await listen("sync-trigger", () => {
+        
+        const unlistenSyncTrigger = await listen("sync-trigger", () => {
           DataSyncService.triggerSync();
         });
+
+        const unlistenSyncStatus = await listen("sync-status", (event: any) => {
+          const { title, message, type } = event.payload;
+          showToast(title, message, type);
+        });
+
+        return () => {
+          unlistenSyncTrigger();
+          unlistenSyncStatus();
+        };
       };
       
-      const unlistenPromise = setupListener();
+      const unlistenPromise = setupListeners();
       return () => {
         unlistenPromise.then(f => f());
       };
     }
-  }, [isDbReady]);
+  }, [isDbReady, showToast]);
 
   // ── SESSION LOGGING ──
   useEffect(() => {

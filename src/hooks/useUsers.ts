@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { getDb, resilientExecute } from "@/services/db";
 import { DataSyncService } from "@/services/syncService";
-import { APP_CONFIG, getApiUrl } from "@/services/config";
+import { invoke } from "@tauri-apps/api/core";
 import bcrypt from "bcryptjs";
 import { useActivities } from "./useActivities";
 
@@ -30,20 +30,17 @@ export function useUsers() {
   const fetchUsers = useCallback(async (isCloud: boolean = false) => {
     try {
       if (isCloud) {
-        const url = getApiUrl("/users");
-        const response = await fetch(url);
-        if (response.ok) {
-          const res = await response.json();
-          setUsers(res);
-          return;
-        }
+        // ✅ Call native Rust command
+        const res: any[] = await invoke("cloud_sync_get", { collectionName: "users" });
+        setUsers(res);
+        return;
       }
 
       const db = await getDb();
       const res = await db.select<SystemUser[]>("SELECT * FROM users WHERE COALESCE(is_deleted, 0) = 0 ORDER BY id ASC");
       setUsers(res);
     } catch (e) {
-      console.error(e);
+      console.error("Failed to fetch users via Rust bridge:", e);
     } finally {
       setLoading(false);
     }
@@ -59,39 +56,24 @@ export function useUsers() {
     const userId = (user as any).id || crypto.randomUUID();
     let synced = 0;
 
-    // 1. Try Cloud Update First
     try {
-      const response = await fetch(getApiUrl("/users/manage"), {
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${APP_CONFIG.AUTH_TOKEN}`
-        },
-        body: JSON.stringify({ action: "upsert", user: { ...user, id: userId } })
+      // ✅ Call native Rust command
+      const result: any = await invoke("cloud_manage_users", { 
+        action: "upsert", 
+        user: { ...user, id: userId } 
       });
-      if (response.ok) {
-        synced = 1;
-      }
+      if (result.success) synced = 1;
     } catch (e) {
-      console.warn("Cloud update failed, will sync later:", e);
+      console.warn("Cloud add failed via Rust, will sync later:", e);
     }
 
-    // 2. Local Update
     const db = await getDb();
     await resilientExecute(
       "INSERT INTO users (id, name, email, role, status, department, avatar, initials, password, manager_id, synced) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
       [
-        userId, 
-        user.name, 
-        user.email, 
-        user.role, 
-        user.status, 
-        user.department, 
-        user.avatar, 
-        user.initials, 
-        bcrypt.hashSync(user.password || "default123", 10), 
-        (user as any).manager_id || null,
-        synced
+        userId, user.name, user.email, user.role, user.status, user.department, 
+        user.avatar, user.initials, bcrypt.hashSync(user.password || "default123", 10), 
+        (user as any).manager_id || null, synced
       ]
     );
     await fetchUsers();
@@ -101,24 +83,17 @@ export function useUsers() {
   const updateUser = async (id: string, updates: Partial<SystemUser>) => {
     let synced = 0;
 
-    // 1. Try Cloud Update First
     try {
-      const response = await fetch(getApiUrl("/users/manage"), {
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${APP_CONFIG.AUTH_TOKEN}`
-        },
-        body: JSON.stringify({ action: "upsert", user: { id, ...updates } })
+      // ✅ Call native Rust command
+      const result: any = await invoke("cloud_manage_users", { 
+        action: "upsert", 
+        user: { id, ...updates } 
       });
-      if (response.ok) {
-        synced = 1;
-      }
+      if (result.success) synced = 1;
     } catch (e) {
-      console.warn("Cloud update failed, will sync later:", e);
+      console.warn("Cloud update failed via Rust, will sync later:", e);
     }
 
-    // 2. Local Update
     const db = await getDb();
     const validCols = ['name', 'email', 'role', 'status', 'department', 'avatar', 'initials', 'password', 'manager_id', 'synced'];
     
@@ -146,36 +121,21 @@ export function useUsers() {
   const deleteUser = async (id: string) => {
     let synced = 0;
 
-    // 1. Try Cloud Update First
     try {
-      const response = await fetch(getApiUrl("/users/manage"), {
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${APP_CONFIG.AUTH_TOKEN}`
-        },
-        body: JSON.stringify({ action: "delete", user: { id } })
-      });
-      if (response.ok) {
-        synced = 1;
-      }
+      // ✅ Call native Rust command
+      const result: any = await invoke("cloud_manage_users", { action: "delete", user: { id } });
+      if (result.success) synced = 1;
     } catch (e) {
-      console.warn("Cloud delete failed, will sync later:", e);
+      console.warn("Cloud delete failed via Rust, will sync later:", e);
     }
 
-    // 2. Local Update
     const db = await getDb();
-    
-    // Clear manager_id for anyone who was managed by this user
     await resilientExecute("UPDATE users SET manager_id = NULL, synced = $1 WHERE manager_id = $2", [synced, id]);
-    
-    // Mark user as deleted
     await resilientExecute("UPDATE users SET is_deleted = 1, synced = $1, updated_at = datetime('now') WHERE id = $2", [synced, id]);
     
     await fetchUsers();
     if (synced === 0) DataSyncService.triggerSync();
 
-    // Log deletion activity
     await logActivity({
       user_name: "Admin",
       user_id: "system",
