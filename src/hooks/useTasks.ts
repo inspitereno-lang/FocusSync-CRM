@@ -86,11 +86,11 @@ export function useTasks(emailFilter?: string) {
     }
   };
 
-  const updateTask = async (id: string, updates: Partial<Task>) => {
+  const updateTask = async (id: string | number, updates: Partial<Task>) => {
     try {
       await invoke("cloud_sync_upsert", { 
         collectionName: "tasks",
-        id,
+        id: id.toString(),
         data: updates 
       });
       await fetchTasks();
@@ -109,9 +109,9 @@ export function useTasks(emailFilter?: string) {
     }
   };
 
-  const deleteTask = async (id: string) => {
+  const deleteTask = async (id: string | number) => {
     try {
-      await invoke("cloud_sync_delete", { collectionName: "tasks", id });
+      await invoke("cloud_sync_delete", { collectionName: "tasks", id: id.toString() });
       await fetchTasks();
     } catch (e) {
       console.error("Failed to delete task from MongoDB:", e);

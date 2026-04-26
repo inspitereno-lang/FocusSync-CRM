@@ -60,14 +60,14 @@ export function useUsers() {
     }
   };
 
-  const updateUser = async (id: string, updates: Partial<SystemUser>) => {
+  const updateUser = async (id: string | number, updates: Partial<SystemUser>) => {
     try {
       if (updates.password) {
         updates.password = bcrypt.hashSync(updates.password, 10) as any;
       }
       await invoke("cloud_sync_upsert", { 
         collectionName: "users",
-        id: id,
+        id: id.toString(),
         data: updates 
       });
       await fetchUsers();
@@ -77,9 +77,9 @@ export function useUsers() {
     }
   };
 
-  const deleteUser = async (id: string) => {
+  const deleteUser = async (id: string | number) => {
     try {
-      await invoke("cloud_sync_delete", { collectionName: "users", id });
+      await invoke("cloud_sync_delete", { collectionName: "users", id: id.toString() });
       await fetchUsers();
       
       await logActivity({
