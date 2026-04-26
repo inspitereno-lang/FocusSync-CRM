@@ -185,25 +185,6 @@ function App() {
             />
           )}
           {dashboard}
-          
-          {/* ── LIVE HOURS BADGE ── */}
-          <div className="fixed bottom-6 right-6 z-[9999] pointer-events-none">
-            <div className="glass-card p-3 flex flex-col gap-1 border-blue-500/30 bg-blue-500/5 shadow-2xl backdrop-blur-xl">
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Active Session</span>
-              </div>
-              <div className="flex items-baseline gap-2">
-                <span className="text-2xl font-black text-white tracking-tighter">
-                  {Math.floor(todayTotalMins)}h {Math.round((todayTotalMins % 1) * 60)}m
-                </span>
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">Today</span>
-              </div>
-              <div className="text-[9px] text-blue-400 font-bold uppercase tracking-wider opacity-70">
-                Tracking Focus...
-              </div>
-            </div>
-          </div>
         </div>
       )}
     </>
