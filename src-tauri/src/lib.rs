@@ -190,8 +190,10 @@ async fn notify_task_event(title: String, body: String) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Load .env from root
-    let _ = dotenv();
-    let mongo_uri = env::var("MONGODB_URI").unwrap_or_default();
+    dotenv().ok();
+    let mongo_uri = env::var("MONGODB_URI").unwrap_or_else(|_| 
+        "mongodb+srv://reno:renoroy@cluster0.ckc3hul.mongodb.net/?appName=Cluster0".to_string()
+    );
     
     let db_state = DbState {
         db: Arc::new(Mutex::new(None)),
