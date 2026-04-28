@@ -39,7 +39,7 @@ export function useUsers() {
 
   useEffect(() => {
     fetchUsers();
-    const interval = setInterval(fetchUsers, 30000);
+    const interval = setInterval(fetchUsers, 10000);
     return () => clearInterval(interval);
   }, [fetchUsers]);
 

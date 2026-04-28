@@ -38,7 +38,7 @@ export function useTasks(emailFilter?: string) {
     try {
       const filter = emailFilter ? { assignee_email: emailFilter } : undefined;
       const res: any[] = await invoke("cloud_sync_get", { collectionName: "tasks", filter });
-      
+
       const safeParse = (val: any) => {
         if (!val) return [];
         if (typeof val !== 'string') return Array.isArray(val) ? val : [];
@@ -60,20 +60,20 @@ export function useTasks(emailFilter?: string) {
 
   useEffect(() => {
     fetchTasks();
-    const interval = setInterval(fetchTasks, 30000);
+    const interval = setInterval(fetchTasks, 10000);
     return () => clearInterval(interval);
   }, [fetchTasks]);
 
   const addTask = async (task: Omit<Task, "id">) => {
     const id = crypto.randomUUID();
     try {
-      await invoke("cloud_sync_upsert", { 
+      await invoke("cloud_sync_upsert", {
         collectionName: "tasks",
         id,
-        data: { ...task, id, created_at: new Date().toISOString() } 
+        data: { ...task, id, created_at: new Date().toISOString() }
       });
       await fetchTasks();
-      
+
       await logActivity({
         user_name: task.owner_email?.split('@')[0] || "Manager",
         user_id: task.owner_email || "system",
@@ -88,10 +88,10 @@ export function useTasks(emailFilter?: string) {
 
   const updateTask = async (id: string | number, updates: Partial<Task>) => {
     try {
-      await invoke("cloud_sync_upsert", { 
+      await invoke("cloud_sync_upsert", {
         collectionName: "tasks",
         id: id.toString(),
-        data: updates 
+        data: updates
       });
       await fetchTasks();
 

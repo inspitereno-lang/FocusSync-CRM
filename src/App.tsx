@@ -63,10 +63,10 @@ function App() {
       };
       fetchTodayInitial();
       
-      // Ping every 2 minutes to keep session active
+      // Ping every 30 seconds to keep session active
       pingInterval = setInterval(() => {
         logPing(user.id);
-      }, 120000);
+      }, 30000);
     }
     return () => {
       if (pingInterval) clearInterval(pingInterval);

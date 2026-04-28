@@ -11,6 +11,7 @@ import { useTasks, Task } from "@/hooks/useTasks";
 import { useUsers, SystemUser } from "@/hooks/useUsers";
 import { TaskModal, UserModal } from "@/components/ui/Modals";
 import AttendanceReport from "@/components/Proctoring/AttendanceReport";
+import { useAttendance } from "@/hooks/useAttendance";
 
 import { useActivities } from "@/hooks/useActivities";
 import { useSessions } from "@/hooks/useSessions";
@@ -128,6 +129,7 @@ export default function ManagerDashboard() {
   const { getTodayMinutes, refresh: refreshSessions } = useSessions();
   const { messages, sendMessage } = useMessages();
   const { activities } = useActivities();
+  const { activeSessions, fetchActiveStatus } = useAttendance();
   
   // Filter for ONLY this manager's team
   const TEAM = allUsers.filter(u => u.manager_id === user?.id);
@@ -155,7 +157,11 @@ export default function ManagerDashboard() {
 
   useEffect(() => {
     fetchAlerts();
-    const interval = setInterval(fetchAlerts, 30000);
+    fetchActiveStatus();
+    const interval = setInterval(() => {
+      fetchAlerts();
+      fetchActiveStatus();
+    }, 10000);
     return () => clearInterval(interval);
   }, [TEAM.length]);
 
@@ -237,7 +243,7 @@ export default function ManagerDashboard() {
     else await addUser({ ...u, id: `emp-${Date.now()}`, avatar: "#8b5cf6", initials: u.name?.substring(0, 2).toUpperCase() || "", manager_id: user?.id } as any);
   };
 
-  const online=TEAM.filter(m=>m.status==="active").length; // mapped 'active' to online
+  const online = TEAM.filter(m => activeSessions.some(as => as.user_id === m.id)).length;
   const avgFocus=TEAM.length ? Math.round(TEAM.reduce((a,m)=>a+(m.focusScore||90),0)/TEAM.length) : 0;
   const pending=tasks.filter(t=>t.status==="pending");
   const completed=tasks.filter(t=>t.status==="completed");
@@ -646,7 +652,29 @@ export default function ManagerDashboard() {
             <div className="text-slate-600 text-xs mt-1">Contact Admin to assign staff to your management</div>
           </div>
         ) : (
-          TEAM.map(m=>(<div key={m.id} className="leaderboard-row group"><div className="lb-avatar" style={{background:m.avatar}}>{m.initials}</div><div className="lb-info flex-1"><div className="lb-name">{m.name}</div><div className="lb-dept">{m.department} · {m.currentTask||'Working'}</div></div><div style={{display:"flex",alignItems:"center",gap:"0.75rem"}}><span style={{fontSize:"0.75rem",color:"#94a3b8"}}>{m.todayHours||0}h today</span><span className={`status-badge ${m.status==="active"?"live":m.status==="inactive"?"idle":"offline"}`}>{m.status}</span><span className="lb-score">{m.focusScore||90}%</span><div className="opacity-0 group-hover:opacity-100 flex items-center gap-2"><button onClick={(e)=>{e.stopPropagation();setEditingUser(m);setIsUserModalOpen(true);}} className="text-blue-400 px-2 py-1 text-xs hover:bg-blue-500/10 rounded transition-all">Edit</button><button onClick={async (e)=>{e.stopPropagation(); if(confirm(`Remove ${m.name} from your team?`)) await deleteUser(m.id);}} className="text-red-400 px-2 py-1 text-xs hover:bg-red-500/10 rounded transition-all"><Trash2 size={14}/></button></div></div></div>))
+          TEAM.map(m=>{
+            const isOnline = activeSessions.some(as => as.user_id === m.id);
+            return (
+              <div key={m.id} className="leaderboard-row group">
+                <div className="lb-avatar" style={{background:m.avatar}}>{m.initials}</div>
+                <div className="lb-info flex-1">
+                  <div className="lb-name">{m.name}</div>
+                  <div className="lb-dept">{m.department} · {m.currentTask||'Working'}</div>
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:"0.75rem"}}>
+                  <span style={{fontSize:"0.75rem",color:"#94a3b8"}}>{m.todayHours||0}h today</span>
+                  <span className={`status-badge ${isOnline ? "live" : "offline"}`}>
+                    {isOnline ? "Online" : "Offline"}
+                  </span>
+                  <span className="lb-score">{m.focusScore||90}%</span>
+                  <div className="opacity-0 group-hover:opacity-100 flex items-center gap-2">
+                    <button onClick={(e)=>{e.stopPropagation();setEditingUser(m);setIsUserModalOpen(true);}} className="text-blue-400 px-2 py-1 text-xs hover:bg-blue-500/10 rounded transition-all">Edit</button>
+                    <button onClick={async (e)=>{e.stopPropagation(); if(confirm(`Remove ${m.name} from your team?`)) await deleteUser(m.id);}} className="text-red-400 px-2 py-1 text-xs hover:bg-red-500/10 rounded transition-all"><Trash2 size={14}/></button>
+                  </div>
+                </div>
+              </div>
+            );
+          })
         )}
       </div>
     </div>

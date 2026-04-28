@@ -108,7 +108,7 @@ const AttendanceReport = ({ userId }) => {
 
   useEffect(() => {
     fetchStats();
-    const interval = setInterval(fetchStats, 30000); // refresh every 30s
+    const interval = setInterval(fetchStats, 10000); // refresh every 10s
     return () => clearInterval(interval);
   }, [userId]);
 

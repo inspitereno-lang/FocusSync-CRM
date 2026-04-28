@@ -199,7 +199,7 @@ export default function AdminDashboard() {
       fetchAlerts();
       fetchAllUserStats().then(setAllUserStats);
       setCurrentTime(new Date());
-    }, 30000);
+    }, 10000);
 
     return () => clearInterval(interval);
   // eslint-disable-next-line react-hooks/exhaustive-deps

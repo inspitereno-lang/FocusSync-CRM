@@ -136,12 +136,12 @@ async fn cloud_get_active_sessions(state: State<'_, DbState>) -> Result<Vec<Valu
     let db_guard = state.db.lock().await;
     let db = db_guard.as_ref().ok_or("Cloud database not connected. Please check your internet or MONGODB_URI.")?;
     
-    let five_minutes_ago = chrono::Utc::now() - chrono::Duration::minutes(5);
+    let two_minutes_ago = chrono::Utc::now() - chrono::Duration::minutes(2);
     let pipeline = vec![
         doc! { 
             "$match": { 
                 "logout_time": Bson::Null, 
-                "last_ping": { "$gt": five_minutes_ago.to_rfc3339() } 
+                "last_ping": { "$gt": two_minutes_ago.to_rfc3339() } 
             } 
         },
         doc! { 
@@ -155,6 +155,7 @@ async fn cloud_get_active_sessions(state: State<'_, DbState>) -> Result<Vec<Valu
         doc! { "$unwind": "$user" },
         doc! { 
             "$project": { 
+                "user_id": 1,
                 "name": "$user.name", 
                 "email": "$user.email", 
                 "role": "$user.role", 
@@ -265,6 +266,61 @@ async fn notify_task_event(title: String, body: String) {
     println!("Task Event: {} - {}", title, body);
 }
 
+#[tauri::command]
+fn get_system_idle_time() -> f64 {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        let output = Command::new("ioreg")
+            .arg("-c")
+            .arg("IOHIDSystem")
+            .output()
+            .ok();
+        
+        if let Some(out) = output {
+            let s = String::from_utf8_lossy(&out.stdout);
+            if let Some(line) = s.lines().find(|l| l.contains("HIDIdleTime")) {
+                if let Some(val_str) = line.split('=').last() {
+                    if let Ok(val) = val_str.trim().parse::<u64>() {
+                        return val as f64 / 1_000_000_000.0;
+                    }
+                }
+            }
+        }
+    }
+    
+    #[cfg(target_os = "windows")]
+    {
+        use std::mem;
+        
+        #[repr(C)]
+        struct LASTINPUTINFO {
+            cb_size: u32,
+            dw_time: u32,
+        }
+
+        extern "system" {
+            fn GetLastInputInfo(plii: *mut LASTINPUTINFO) -> i32;
+            fn GetTickCount() -> u32;
+        }
+
+        unsafe {
+            let mut lii = LASTINPUTINFO {
+                cb_size: mem::size_of::<LASTINPUTINFO>() as u32,
+                dw_time: 0,
+            };
+            
+            if GetLastInputInfo(&mut lii) != 0 {
+                let now = GetTickCount();
+                let idle_ms = now.wrapping_sub(lii.dw_time);
+                return idle_ms as f64 / 1000.0;
+            }
+        }
+    }
+
+    0.0
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Load .env from root
@@ -348,7 +404,8 @@ pub fn run() {
             check_db_status,
             cloud_sync_upsert,
             cloud_sync_delete,
-            cloud_clear_attendance_data
+            cloud_clear_attendance_data,
+            get_system_idle_time
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

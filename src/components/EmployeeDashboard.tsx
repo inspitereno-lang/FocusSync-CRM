@@ -183,7 +183,7 @@ export default function EmployeeDashboard() {
       }
     };
     fetchRecentSessions();
-    const interval = setInterval(fetchRecentSessions, 30000);
+    const interval = setInterval(fetchRecentSessions, 10000);
     return () => clearInterval(interval);
   }, [user]);
 

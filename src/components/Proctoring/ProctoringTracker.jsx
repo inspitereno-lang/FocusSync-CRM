@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { invoke } from "@tauri-apps/api/core";
 import { gazeTracker } from '../../lib/gaze-tracking';
 import GazeDebugOverlay from './GazeDebugOverlay';
 
@@ -25,8 +26,10 @@ const ProctoringTracker = ({ onStatUpdate, onTimeout, userDraft, socket, session
     const [faceDetected, setFaceDetected] = useState(true); // Face detection status
     const [keyCount, setKeyCount] = useState(0);
     const [lastFaceDetectedAt, setLastFaceDetectedAt] = useState(Date.now());
+    const [lastInteractionAt, setLastInteractionAt] = useState(Date.now());
     const [showLogoutWarning, setShowLogoutWarning] = useState(false);
     const [warningCountdown, setWarningCountdown] = useState(60);
+    const [logoutReason, setLogoutReason] = useState("");
 
     // REFS
     const typingHistoryRef = useRef([]);
@@ -111,9 +114,12 @@ const ProctoringTracker = ({ onStatUpdate, onTimeout, userDraft, socket, session
 
     // ... (rest of observers)
     
-    // --- 1. MOUSE REGION TRACKING ---
+    // --- 1. MOUSE REGION & ACTIVITY TRACKING ---
     useEffect(() => {
+        const resetTimer = () => setLastInteractionAt(Date.now());
+
         const handleMouseMove = (e) => {
+            resetTimer();
             const { clientX, clientY } = e;
             const width = window.innerWidth;
             const height = window.innerHeight;
@@ -134,35 +140,75 @@ const ProctoringTracker = ({ onStatUpdate, onTimeout, userDraft, socket, session
             setMouseRegion(region);
         };
 
+        const handleMouseDown = () => resetTimer();
+
         window.addEventListener('mousemove', handleMouseMove);
-        return () => window.removeEventListener('mousemove', handleMouseMove);
+        window.addEventListener('mousedown', handleMouseDown);
+        window.addEventListener('click', handleMouseDown);
+        window.addEventListener('scroll', resetTimer, { passive: true });
+
+        return () => {
+            window.removeEventListener('mousemove', handleMouseMove);
+            window.removeEventListener('mousedown', handleMouseDown);
+            window.removeEventListener('click', handleMouseDown);
+            window.removeEventListener('scroll', resetTimer);
+        };
+    }, []);
+
+    // --- 1.05 GLOBAL ACTIVITY POLLING (Tauri Native) ---
+    useEffect(() => {
+        // Poll system idle time every 5 seconds
+        const pollInterval = setInterval(async () => {
+            try {
+                const idleSeconds = await invoke("get_system_idle_time");
+                // If idle time is less than 5 seconds, it means user was active recently
+                if (idleSeconds < 5) {
+                    setLastInteractionAt(Date.now() - (idleSeconds * 1000));
+                }
+            } catch (err) {
+                console.error("Failed to fetch system idle time:", err);
+            }
+        }, 5000);
+
+        return () => clearInterval(pollInterval);
     }, []);
 
     // --- 1.1 KEYBOARD ACTIVITY TRACKING ---
     useEffect(() => {
         const handleKeyDown = () => {
             setKeyCount(prev => prev + 1);
+            setLastInteractionAt(Date.now());
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, []);
 
-    // --- 1.2 AUTO LOGOUT LOGIC (3 MINS) ---
+    // --- 1.2 AUTO LOGOUT LOGIC (2 MINS) ---
     useEffect(() => {
         const checkInterval = setInterval(() => {
-            if (!faceDetected) {
-                const elapsed = Date.now() - lastFaceDetectedAt;
+            const now = Date.now();
+            const idleElapsed = now - lastInteractionAt;
+            const faceMissingElapsed = faceDetected ? 0 : now - lastFaceDetectedAt;
+            
+            // Choose the more critical one
+            const isIdle = idleElapsed > 60000;
+            const isFaceMissing = faceMissingElapsed > 60000;
+
+            if (isIdle || isFaceMissing) {
+                const maxElapsed = Math.max(idleElapsed, faceMissingElapsed);
+                const reason = isIdle ? "Inactivity" : "Face Not Detected";
+                setLogoutReason(reason);
                 
-                // Show warning after 2 minutes
-                if (elapsed > 120000 && elapsed < 180000) {
+                // Show warning after 1 minute
+                if (maxElapsed > 60000 && maxElapsed < 120000) {
                     setShowLogoutWarning(true);
-                    setWarningCountdown(Math.ceil((180000 - elapsed) / 1000));
+                    setWarningCountdown(Math.ceil((120000 - maxElapsed) / 1000));
                 }
                 
-                // Logout after 3 minutes
-                if (elapsed >= 180000) {
-                    console.error("CRITICAL: Face missing for 3 minutes. Triggering auto-logout.");
-                    handleAutoLogout();
+                // Logout after 2 minutes
+                if (maxElapsed >= 120000) {
+                    console.error(`CRITICAL: ${reason} for 2 minutes. Triggering auto-logout.`);
+                    handleAutoLogout(reason);
                 }
             } else {
                 setShowLogoutWarning(false);
@@ -170,17 +216,17 @@ const ProctoringTracker = ({ onStatUpdate, onTimeout, userDraft, socket, session
         }, 1000);
 
         return () => clearInterval(checkInterval);
-    }, [faceDetected, lastFaceDetectedAt]);
+    }, [faceDetected, lastFaceDetectedAt, lastInteractionAt]);
 
-    const handleAutoLogout = async () => {
+    const handleAutoLogout = async (reason = "Inactivity") => {
         if (socket && sessionId) {
-            socket.emit('session_timeout', { sessionId, reason: 'Face Not Detected' });
+            socket.emit('session_timeout', { sessionId, reason });
         }
         
         if (onTimeout) {
             onTimeout();
         } else {
-            alert("You have been logged out due to inactivity (Face not detected for 3 minutes).");
+            alert(`You have been logged out due to ${reason.toLowerCase()} for 2 minutes.`);
             window.location.reload();
         }
     };
@@ -337,9 +383,11 @@ const ProctoringTracker = ({ onStatUpdate, onTimeout, userDraft, socket, session
                     gap: '0.5rem',
                     animation: 'pulse 2s infinite'
                 }}>
-                    <div style={{ fontWeight: 'bold', fontSize: '1.2rem' }}>⚠️ Face Not Detected!</div>
+                    <div style={{ fontWeight: 'bold', fontSize: '1.2rem' }}>⚠️ {logoutReason === "Inactivity" ? "Idle Timeout" : "Face Not Detected"}!</div>
                     <div>Auto-logout in <span style={{ fontSize: '1.5rem', fontWeight: '900' }}>{warningCountdown}s</span></div>
-                    <div style={{ fontSize: '0.8rem', opacity: 0.8 }}>Please look at the camera to maintain your session.</div>
+                    <div style={{ fontSize: '0.8rem', opacity: 0.8 }}>
+                        {logoutReason === "Inactivity" ? "Please move your mouse or type to stay logged in." : "Please look at the camera to maintain your session."}
+                    </div>
                 </div>
             )}
 

@@ -32,7 +32,7 @@ export function useActivities() {
 
   useEffect(() => {
     fetchActivities();
-    const interval = setInterval(fetchActivities, 30000);
+    const interval = setInterval(fetchActivities, 10000);
     return () => clearInterval(interval);
   }, [fetchActivities]);
 
